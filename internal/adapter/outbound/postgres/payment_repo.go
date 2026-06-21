@@ -5,12 +5,12 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
 	"github.com/Trisentosa/payment-module/internal/infrastructure/logger"
 	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PaymentRepo struct {
