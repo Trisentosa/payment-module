@@ -1,0 +1,8 @@
+.env
+*.env.local
+/bin/
+/dist/
+*.test
+*.out
+vendor/
+.DS_Store
