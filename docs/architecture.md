@@ -28,6 +28,6 @@ cmd/server          — wires dependencies, starts HTTP server
 ## Key Decisions
 
 - No DI framework — manual wiring in `cmd/server/main.go`
-- No ORM — raw pgx v5 queries for full control and predictable performance
+- sqlc for query generation — SQL authored in `internal/adapter/outbound/postgres/queries/`, generated Go in `db/` (never edit manually). pgxpool used directly for transactions.
 - No FK constraints — enforced at application layer; see [database.md](database.md)
 - Domain events written atomically with the aggregate in one transaction; publishing deferred to TD-02 outbox

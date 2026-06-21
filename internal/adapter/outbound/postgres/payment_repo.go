@@ -2,23 +2,26 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
-	"fmt"
 
+	"github.com/Trisentosa/payment-module/internal/adapter/outbound/postgres/db"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
 	"github.com/Trisentosa/payment-module/internal/infrastructure/logger"
 	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type PaymentRepo struct {
 	pool *pgxpool.Pool
+	q    *db.Queries
 }
 
 func NewPaymentRepo(pool *pgxpool.Pool) *PaymentRepo {
-	return &PaymentRepo{pool: pool}
+	return &PaymentRepo{pool: pool, q: db.New(pool)}
 }
 
 func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
@@ -39,32 +42,40 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 		}
 	}()
 
-	_, err = tx.Exec(ctx, `
-		INSERT INTO payments (
-			id, reference_id, caller_service, gateway_type, gateway_transaction_id,
-			status, amount, currency, payment_method_type,
-			customer_info, metadata, gateway_request_payload, gateway_response_payload,
-			description, expired_at, paid_at, created_at, updated_at
-		) VALUES (
-			$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18
-		)
-		ON CONFLICT (reference_id, caller_service) DO NOTHING`,
-		p.ID, p.ReferenceID, p.CallerService, p.GatewayType, nilIfEmpty(p.GatewayTransactionID),
-		p.Status, p.Amount.Amount, p.Amount.Currency, nilIfEmpty(p.PaymentMethodType),
-		customerInfoJSON, metadataJSON, nil, nil,
-		nilIfEmpty(p.Description), p.ExpiredAt, p.PaidAt, p.CreatedAt, p.UpdatedAt,
-	)
+	qtx := r.q.WithTx(tx)
+
+	err = qtx.InsertPayment(ctx, db.InsertPaymentParams{
+		ID:                     p.ID,
+		ReferenceID:            p.ReferenceID,
+		CallerService:          p.CallerService,
+		GatewayType:            string(p.GatewayType),
+		GatewayTransactionID:   toNullableString(p.GatewayTransactionID),
+		Status:                 string(p.Status),
+		Amount:                 p.Amount.Amount,
+		Currency:               p.Amount.Currency,
+		PaymentMethodType:      toNullableString(p.PaymentMethodType),
+		CustomerInfo:           customerInfoJSON,
+		Metadata:               metadataJSON,
+		GatewayRequestPayload:  nil,
+		GatewayResponsePayload: nil,
+		Description:            pgtype.Text{String: p.Description, Valid: p.Description != ""},
+		ExpiredAt:              p.ExpiredAt,
+		PaidAt:                 p.PaidAt,
+		CreatedAt:              pgtype.Timestamptz{Time: p.CreatedAt, Valid: true},
+		UpdatedAt:              pgtype.Timestamptz{Time: p.UpdatedAt, Valid: true},
+	})
 	if err != nil {
 		return apperror.Internal("insert payment", err)
 	}
 
 	events := p.PopEvents()
 	for i, evt := range events {
-		_, err = tx.Exec(ctx, `
-			INSERT INTO payment_events (aggregate_id, aggregate_type, event_type, sequence_number, payload)
-			VALUES ($1, 'PAYMENT', $2, $3, $4)`,
-			p.ID, evt.EventType(), i+1, eventPayload(evt),
-		)
+		err = qtx.InsertPaymentEvent(ctx, db.InsertPaymentEventParams{
+			AggregateID:    p.ID,
+			EventType:      evt.EventType(),
+			SequenceNumber: int32(i + 1),
+			Payload:        eventPayload(evt),
+		})
 		if err != nil {
 			return apperror.Internal("insert payment_event", err)
 		}
@@ -79,80 +90,102 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 }
 
 func (r *PaymentRepo) FindByID(ctx context.Context, id uuid.UUID) (*payment.Payment, error) {
-	row := r.pool.QueryRow(ctx,
-		fmt.Sprintf("SELECT %s FROM payments WHERE id = $1 AND deleted_at IS NULL", selectPaymentCols),
-		id)
-	p, err := scanPayment(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, apperror.NotFound("payment not found: " + id.String())
-		}
-		return nil, apperror.Internal("scan payment", err)
+	row, err := r.q.GetPaymentByID(ctx, id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperror.NotFound("payment not found: " + id.String())
 	}
-	return p, nil
+	if err != nil {
+		return nil, apperror.Internal("get payment", err)
+	}
+	return toDomain(row)
 }
 
 func (r *PaymentRepo) FindByReference(ctx context.Context, referenceID, callerService string) (*payment.Payment, error) {
-	row := r.pool.QueryRow(ctx,
-		fmt.Sprintf("SELECT %s FROM payments WHERE reference_id = $1 AND caller_service = $2 AND deleted_at IS NULL", selectPaymentCols),
-		referenceID, callerService)
-	p, err := scanPayment(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, apperror.NotFound("payment not found for reference: " + referenceID)
-		}
-		return nil, apperror.Internal("scan payment", err)
+	row, err := r.q.GetPaymentByReference(ctx, db.GetPaymentByReferenceParams{
+		ReferenceID:   referenceID,
+		CallerService: callerService,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperror.NotFound("payment not found for reference: " + referenceID)
 	}
-	return p, nil
+	if err != nil {
+		return nil, apperror.Internal("get payment by reference", err)
+	}
+	return toDomain(row)
 }
 
 func (r *PaymentRepo) FindByGatewayTransactionID(ctx context.Context, gatewayTxID string) (*payment.Payment, error) {
-	row := r.pool.QueryRow(ctx,
-		fmt.Sprintf("SELECT %s FROM payments WHERE gateway_transaction_id = $1 AND deleted_at IS NULL", selectPaymentCols),
-		gatewayTxID)
-	p, err := scanPayment(row)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, apperror.NotFound("payment not found for gateway tx: " + gatewayTxID)
-		}
-		return nil, apperror.Internal("scan payment", err)
+	row, err := r.q.GetPaymentByGatewayTransactionID(ctx, &gatewayTxID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, apperror.NotFound("payment not found for gateway tx: " + gatewayTxID)
 	}
-	return p, nil
+	if err != nil {
+		return nil, apperror.Internal("get payment by gateway tx", err)
+	}
+	return toDomain(row)
 }
 
 func (r *PaymentRepo) FindExpired(ctx context.Context, limit int) ([]*payment.Payment, error) {
-	rows, err := r.pool.Query(ctx,
-		fmt.Sprintf(`SELECT %s FROM payments
-			WHERE status IN ('PENDING','INITIATED')
-			  AND expired_at < NOW()
-			  AND deleted_at IS NULL
-			LIMIT $1`, selectPaymentCols),
-		limit)
+	rows, err := r.q.GetExpiredPayments(ctx, int32(limit))
 	if err != nil {
 		return nil, apperror.Internal("query expired payments", err)
 	}
-	defer rows.Close()
-
-	payments, err := scanPayments(rows)
-	if err != nil {
-		return nil, apperror.Internal("scan expired payments", err)
+	payments := make([]*payment.Payment, 0, len(rows))
+	for _, row := range rows {
+		p, err := toDomain(row)
+		if err != nil {
+			return nil, err
+		}
+		payments = append(payments, p)
 	}
 	return payments, nil
 }
 
 func (r *PaymentRepo) UpdateStatus(ctx context.Context, id uuid.UUID, status payment.Status, _ map[string]any) error {
-	_, err := r.pool.Exec(ctx,
-		`UPDATE payments SET status = $1, updated_at = NOW() WHERE id = $2`,
-		status, id)
+	err := r.q.UpdatePaymentStatus(ctx, db.UpdatePaymentStatusParams{
+		ID:     id,
+		Status: string(status),
+	})
 	if err != nil {
 		return apperror.Internal("update payment status", err)
 	}
 	return nil
 }
 
-func nilIfEmpty(s string) any {
-	if s == "" {
-		return nil
+func toDomain(row db.Payment) (*payment.Payment, error) {
+	p := &payment.Payment{
+		ID:                   row.ID,
+		ReferenceID:          row.ReferenceID,
+		CallerService:        row.CallerService,
+		GatewayType:          payment.GatewayType(row.GatewayType),
+		GatewayTransactionID: derefString(row.GatewayTransactionID),
+		Status:               payment.Status(row.Status),
+		Amount:               payment.Money{Amount: row.Amount, Currency: row.Currency},
+		PaymentMethodType:    derefString(row.PaymentMethodType),
+		Description:          row.Description.String,
+		ExpiredAt:            row.ExpiredAt,
+		PaidAt:               row.PaidAt,
+		CreatedAt:            row.CreatedAt.Time,
+		UpdatedAt:            row.UpdatedAt.Time,
+		DeletedAt:            row.DeletedAt,
 	}
-	return s
+	if err := json.Unmarshal(row.CustomerInfo, &p.CustomerInfo); err != nil {
+		return nil, apperror.Internal("unmarshal customer_info", err)
+	}
+	if row.Metadata != nil {
+		if err := json.Unmarshal(row.Metadata, &p.Metadata); err != nil {
+			return nil, apperror.Internal("unmarshal metadata", err)
+		}
+	}
+	if row.GatewayRequestPayload != nil {
+		if err := json.Unmarshal(row.GatewayRequestPayload, &p.GatewayRequestPayload); err != nil {
+			return nil, apperror.Internal("unmarshal gateway_request_payload", err)
+		}
+	}
+	if row.GatewayResponsePayload != nil {
+		if err := json.Unmarshal(row.GatewayResponsePayload, &p.GatewayResponsePayload); err != nil {
+			return nil, apperror.Internal("unmarshal gateway_response_payload", err)
+		}
+	}
+	return p, nil
 }

@@ -1,4 +1,4 @@
-.PHONY: up up-full down migrate test lint run
+.PHONY: up up-full down migrate sqlc test lint run
 
 # Mode A: infrastructure only (service runs natively)
 up:
@@ -17,6 +17,9 @@ run:
 
 migrate:
 	go run ./cmd/migrate/main.go up
+
+sqlc:
+	go tool sqlc generate
 
 test:
 	go test ./... -race -count=1

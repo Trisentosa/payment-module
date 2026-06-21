@@ -1,0 +1,35 @@
+version: "2"
+sql:
+  - engine: "postgresql"
+    queries: "internal/adapter/outbound/postgres/queries/"
+    schema: "migrations/"
+    gen:
+      go:
+        package: "db"
+        out: "internal/adapter/outbound/postgres/db"
+        sql_package: "pgx/v5"
+        emit_interface: false
+        emit_json_tags: false
+        overrides:
+          - db_type: "uuid"
+            go_type: "github.com/google/uuid.UUID"
+          - db_type: "jsonb"
+            go_type:
+              import: "encoding/json"
+              type: "RawMessage"
+          - db_type: "pg_catalog.varchar"
+            nullable: true
+            go_type:
+              type: "string"
+              pointer: true
+          - db_type: "pg_catalog.text"
+            nullable: true
+            go_type:
+              type: "string"
+              pointer: true
+          - db_type: "timestamptz"
+            nullable: true
+            go_type:
+              import: "time"
+              type: "Time"
+              pointer: true
