@@ -54,3 +54,11 @@ type PaymentCancelled struct {
 
 func (e PaymentCancelled) EventType() string      { return "PaymentCancelled" }
 func (e PaymentCancelled) AggregateID() uuid.UUID { return e.PaymentID }
+
+type PaymentExpired struct {
+	PaymentID  uuid.UUID
+	OccurredAt time.Time
+}
+
+func (e PaymentExpired) EventType() string      { return "PaymentExpired" }
+func (e PaymentExpired) AggregateID() uuid.UUID { return e.PaymentID }

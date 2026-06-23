@@ -58,6 +58,7 @@ func (w *OutboxWorker) processBatch(ctx context.Context) {
 			AggregateID: row.AggregateID,
 			EventType:   row.EventType,
 			Payload:     row.Payload,
+			OccurredAt:  time.Now().UTC(),
 		})
 		if pubErr != nil {
 			w.markFailed(ctx, row.ID, pubErr)

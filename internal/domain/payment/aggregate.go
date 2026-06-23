@@ -118,6 +118,18 @@ func (p *Payment) MarkFailed(errorCode, errorMessage string) {
 	p.raise(PaymentFailed{PaymentID: p.ID, ErrorCode: errorCode, ErrorMessage: errorMessage, OccurredAt: now})
 }
 
+// MarkExpired transitions to EXPIRED from PENDING or INITIATED.
+func (p *Payment) MarkExpired() error {
+	if p.Status != StatusPending && p.Status != StatusInitiated {
+		return apperror.InvalidState("cannot expire from: " + string(p.Status))
+	}
+	now := time.Now().UTC()
+	p.Status = StatusExpired
+	p.UpdatedAt = now
+	p.raise(PaymentExpired{PaymentID: p.ID, OccurredAt: now})
+	return nil
+}
+
 // Cancel transitions to CANCELLED from PENDING or PROCESSING.
 func (p *Payment) Cancel() error {
 	if p.Status != StatusPending && p.Status != StatusProcessing {

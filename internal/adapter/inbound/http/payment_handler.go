@@ -3,24 +3,42 @@ package http
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/Trisentosa/payment-module/internal/adapter/inbound/http/middleware"
 	"github.com/Trisentosa/payment-module/internal/application/command"
+	"github.com/Trisentosa/payment-module/internal/application/query"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
 )
 
 type PaymentHandler struct {
-	createHandler *command.CreatePaymentHandler
-	cancelHandler *command.CancelPaymentHandler
-	idem          *middleware.IdempotencyService
+	createHandler  *command.CreatePaymentHandler
+	cancelHandler  *command.CancelPaymentHandler
+	idem           *middleware.IdempotencyService
+	getHandler     *query.GetPaymentHandler
+	getByRefHandler *query.GetByRefHandler
+	listHandler    *query.ListPaymentsHandler
 }
 
 func NewPaymentHandler(
 	create *command.CreatePaymentHandler,
 	cancel *command.CancelPaymentHandler,
 	idem *middleware.IdempotencyService,
+	get *query.GetPaymentHandler,
+	getByRef *query.GetByRefHandler,
+	list *query.ListPaymentsHandler,
 ) *PaymentHandler {
-	return &PaymentHandler{createHandler: create, cancelHandler: cancel, idem: idem}
+	return &PaymentHandler{
+		createHandler:   create,
+		cancelHandler:   cancel,
+		idem:            idem,
+		getHandler:      get,
+		getByRefHandler: getByRef,
+		listHandler:     list,
+	}
 }
 
 func (h *PaymentHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +127,80 @@ func (h *PaymentHandler) CancelPayment(w http.ResponseWriter, r *http.Request) {
 		PaymentID: cmd.PaymentID.String(),
 		Status:    CancelPaymentResponseStatus(payment.StatusCancelled),
 	})
+}
+
+func (h *PaymentHandler) GetPayment(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		middleware.WriteError(w, middleware.ErrInvalidJSON)
+		return
+	}
+
+	dto, err := h.getHandler.Handle(r.Context(), query.GetPaymentQuery{ID: id})
+	if err != nil {
+		middleware.WriteError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(dto)
+}
+
+func (h *PaymentHandler) GetPaymentByRef(w http.ResponseWriter, r *http.Request) {
+	refID := r.PathValue("reference_id")
+	callerService := r.Header.Get("X-Service-Name")
+
+	dto, err := h.getByRefHandler.Handle(r.Context(), query.GetByRefQuery{
+		ReferenceID:   refID,
+		CallerService: callerService,
+	})
+	if err != nil {
+		middleware.WriteError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(dto)
+}
+
+func (h *PaymentHandler) ListPayments(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+
+	lq := query.ListPaymentsQuery{
+		Status:        q.Get("status"),
+		CallerService: q.Get("caller_service"),
+	}
+
+	if v := q.Get("from"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			lq.From = &t
+		}
+	}
+	if v := q.Get("to"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			lq.To = &t
+		}
+	}
+	if v := q.Get("cursor"); v != "" {
+		if t, err := time.Parse(time.RFC3339, v); err == nil {
+			lq.Cursor = &t
+		}
+	}
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			lq.Limit = n
+		}
+	}
+
+	result, err := h.listHandler.Handle(r.Context(), lq)
+	if err != nil {
+		middleware.WriteError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 func derefStr(s *string) string {

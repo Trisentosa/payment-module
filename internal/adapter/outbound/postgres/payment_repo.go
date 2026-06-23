@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 
 	"github.com/Trisentosa/payment-module/internal/adapter/outbound/postgres/db"
 	"github.com/Trisentosa/payment-module/internal/application/ports"
@@ -242,4 +243,89 @@ func marshalJSONOrNil(v map[string]any) []byte {
 	}
 	b, _ := json.Marshal(v)
 	return b
+}
+
+func (r *PaymentRepo) ListPaginated(ctx context.Context, f payment.ListFilter) ([]*payment.Payment, error) {
+	var (
+		args  []any
+		where []string
+		i     = 1
+	)
+
+	where = append(where, "deleted_at IS NULL")
+
+	if f.Status != "" {
+		where = append(where, fmt.Sprintf("status = $%d", i))
+		args = append(args, f.Status)
+		i++
+	}
+	if f.CallerService != "" {
+		where = append(where, fmt.Sprintf("caller_service = $%d", i))
+		args = append(args, f.CallerService)
+		i++
+	}
+	if f.From != nil {
+		where = append(where, fmt.Sprintf("created_at >= $%d", i))
+		args = append(args, *f.From)
+		i++
+	}
+	if f.To != nil {
+		where = append(where, fmt.Sprintf("created_at <= $%d", i))
+		args = append(args, *f.To)
+		i++
+	}
+	if f.Cursor != nil {
+		where = append(where, fmt.Sprintf("created_at < $%d", i))
+		args = append(args, *f.Cursor)
+		i++
+	}
+
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+
+	q := `SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
+		       status, amount, currency, payment_method_type,
+		       customer_info, metadata, gateway_request_payload, gateway_response_payload,
+		       description, expired_at, paid_at, created_at, updated_at, deleted_at
+		  FROM payments`
+	for j, c := range where {
+		if j == 0 {
+			q += " WHERE " + c
+		} else {
+			q += " AND " + c
+		}
+	}
+	q += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", i)
+	args = append(args, int32(limit))
+
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, apperror.Internal("list payments", err)
+	}
+	defer rows.Close()
+
+	var results []*payment.Payment
+	for rows.Next() {
+		var row db.Payment
+		if err = rows.Scan(
+			&row.ID, &row.ReferenceID, &row.CallerService, &row.GatewayType,
+			&row.GatewayTransactionID, &row.Status, &row.Amount, &row.Currency,
+			&row.PaymentMethodType, &row.CustomerInfo, &row.Metadata,
+			&row.GatewayRequestPayload, &row.GatewayResponsePayload, &row.Description,
+			&row.ExpiredAt, &row.PaidAt, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt,
+		); err != nil {
+			return nil, apperror.Internal("scan payment row", err)
+		}
+		p, err := toDomain(row)
+		if err != nil {
+			return nil, err
+		}
+		results = append(results, p)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, apperror.Internal("list payments rows", err)
+	}
+	return results, nil
 }

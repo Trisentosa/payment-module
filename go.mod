@@ -80,6 +80,8 @@ require (
 	github.com/pingcap/tidb/pkg/parser v0.0.0-20260418072757-ce92298d1124 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/power-devops/perfstat v0.0.0-20240221224432-82ca36839d55 // indirect
+	github.com/rabbitmq/amqp091-go v1.12.0 // indirect
+	github.com/redis/go-redis/v9 v9.21.0 // indirect
 	github.com/riza-io/grpc-go v0.2.0 // indirect
 	github.com/shirou/gopsutil/v4 v4.26.5 // indirect
 	github.com/sirupsen/logrus v1.9.4 // indirect
