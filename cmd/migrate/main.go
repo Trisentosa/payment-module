@@ -31,7 +31,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("migrate.New: %v", err)
 	}
-	defer m.Close()
+	defer func() { _, _ = m.Close() }()
 
 	switch direction {
 	case "up":

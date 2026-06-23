@@ -3,38 +3,11 @@ package http
 import (
 	"encoding/json"
 	"net/http"
-	"time"
 
 	"github.com/Trisentosa/payment-module/internal/adapter/inbound/http/middleware"
 	"github.com/Trisentosa/payment-module/internal/application/command"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
 )
-
-type CreatePaymentRequest struct {
-	ReferenceID        string         `json:"reference_id"`
-	Amount             int64          `json:"amount"`
-	Currency           string         `json:"currency"`
-	GatewayType        string         `json:"gateway_type"`
-	PaymentMethodType  string         `json:"payment_method_type"`
-	BankCode           string         `json:"bank_code"`
-	CustomerName       string         `json:"customer_name"`
-	CustomerEmail      string         `json:"customer_email"`
-	CustomerPhone      string         `json:"customer_phone"`
-	CustomerExternalID string         `json:"customer_external_id"`
-	Description        string         `json:"description"`
-	ExpiredAt          *time.Time     `json:"expired_at"`
-	Metadata           map[string]any `json:"metadata"`
-}
-
-type CreatePaymentResponse struct {
-	PaymentID           string         `json:"payment_id"`
-	ReferenceID         string         `json:"reference_id"`
-	Status              string         `json:"status"`
-	Amount              int64          `json:"amount"`
-	Currency            string         `json:"currency"`
-	PaymentInstructions map[string]any `json:"payment_instructions,omitempty"`
-	CreatedAt           time.Time      `json:"created_at"`
-}
 
 type PaymentHandler struct {
 	createHandler *command.CreatePaymentHandler
@@ -74,16 +47,16 @@ func (h *PaymentHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		CallerService:      callerService,
 		Amount:             req.Amount,
 		Currency:           req.Currency,
-		GatewayType:        req.GatewayType,
-		PaymentMethodType:  req.PaymentMethodType,
-		BankCode:           req.BankCode,
+		GatewayType:        string(req.GatewayType),
+		PaymentMethodType:  string(req.PaymentMethodType),
+		BankCode:           derefStr(req.BankCode),
 		CustomerName:       req.CustomerName,
 		CustomerEmail:      req.CustomerEmail,
-		CustomerPhone:      req.CustomerPhone,
-		CustomerExternalID: req.CustomerExternalID,
-		Description:        req.Description,
+		CustomerPhone:      derefStr(req.CustomerPhone),
+		CustomerExternalID: derefStr(req.CustomerExternalID),
+		Description:        derefStr(req.Description),
 		ExpiredAt:          req.ExpiredAt,
-		Metadata:           req.Metadata,
+		Metadata:           derefMap(req.Metadata),
 	})
 	if err != nil {
 		middleware.WriteError(w, err)
@@ -100,20 +73,19 @@ func (h *PaymentHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 }
 
 func toCreatePaymentResponse(result *command.CreatePaymentResult) CreatePaymentResponse {
-	return CreatePaymentResponse{
-		PaymentID:           result.Payment.ID.String(),
-		ReferenceID:         result.Payment.ReferenceID,
-		Status:              string(result.Payment.Status),
-		Amount:              result.Payment.Amount.Amount,
-		Currency:            result.Payment.Amount.Currency,
-		PaymentInstructions: result.PaymentInstructions,
-		CreatedAt:           result.Payment.CreatedAt,
+	resp := CreatePaymentResponse{
+		PaymentID:   result.Payment.ID.String(),
+		ReferenceID: result.Payment.ReferenceID,
+		Status:      CreatePaymentResponseStatus(result.Payment.Status),
+		Amount:      result.Payment.Amount.Amount,
+		Currency:    result.Payment.Amount.Currency,
+		CreatedAt:   result.Payment.CreatedAt,
 	}
-}
-
-type CancelPaymentResponse struct {
-	PaymentID string `json:"payment_id"`
-	Status    string `json:"status"`
+	if result.PaymentInstructions != nil {
+		m := map[string]any(result.PaymentInstructions)
+		resp.PaymentInstructions = &m
+	}
+	return resp
 }
 
 func (h *PaymentHandler) CancelPayment(w http.ResponseWriter, r *http.Request) {
@@ -135,6 +107,20 @@ func (h *PaymentHandler) CancelPayment(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 	_ = json.NewEncoder(w).Encode(CancelPaymentResponse{
 		PaymentID: cmd.PaymentID.String(),
-		Status:    string(payment.StatusCancelled),
+		Status:    CancelPaymentResponseStatus(payment.StatusCancelled),
 	})
+}
+
+func derefStr(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+func derefMap(m *map[string]any) map[string]any {
+	if m == nil {
+		return nil
+	}
+	return *m
 }

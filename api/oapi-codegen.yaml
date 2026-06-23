@@ -1,0 +1,11 @@
+# oapi-codegen configuration
+# Generates Go model types from api/openapi.yaml.
+# Run: make openapi
+# Output is committed — regenerate whenever api/openapi.yaml changes.
+package: http
+generate:
+  models: true
+output: ../internal/adapter/inbound/http/openapi_gen.go
+output-options:
+  skip-fmt: false
+  skip-prune: false

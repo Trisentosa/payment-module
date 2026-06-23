@@ -14,12 +14,22 @@ only points to them. Read the relevant doc before working on each area.
 | Database schema & migrations | [docs/database.md](docs/database.md) |
 | Error handling | [docs/error-handling.md](docs/error-handling.md) |
 | Logging | [docs/logging.md](docs/logging.md) |
-| API contract | [docs/api.md](docs/api.md) |
+| API contract & OpenAPI workflow | [docs/openapi.md](docs/openapi.md) |
 | Event schema (RabbitMQ) | [docs/events.md](docs/events.md) |
 | Testing strategy | [docs/testing.md](docs/testing.md) |
 | Local dev setup | [docs/local-dev.md](docs/local-dev.md) |
 | Security | [docs/security.md](docs/security.md) |
 | ADRs | [docs/adr/](docs/adr/) |
+
+## Definition of Done
+
+Before reporting any coding task as complete, run:
+
+```
+make check
+```
+
+This runs `build → lint → test` in order. All three must pass with zero errors. Do not skip or work around failures — fix the root cause.
 
 ## Ground Rules
 

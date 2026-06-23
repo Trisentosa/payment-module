@@ -1,0 +1,293 @@
+openapi: "3.0.3"
+info:
+  title: PayGate API
+  version: "1.0.0"
+  description: |
+    Payment gateway abstraction layer. Accepts payment creation and cancellation
+    requests and routes them to the configured downstream gateway (currently Midtrans).
+
+    **Idempotency**: `POST /payments` is idempotent on the composite key
+    `(X-Service-Name, reference_id)`. Replaying the same pair within the TTL
+    (24 h) returns the cached 201 response with the `X-Idempotent-Replay: true`
+    header set.
+
+    **Error shape**: all 4xx/5xx responses share the `ErrorResponse` schema.
+    The `code` field maps directly to `apperror.Code` values in the server.
+
+servers:
+  - url: /
+    description: Local / default (path-relative)
+
+tags:
+  - name: payments
+    description: Payment lifecycle operations
+
+paths:
+  /payments:
+    post:
+      operationId: CreatePayment
+      summary: Initiate a new payment
+      tags: [payments]
+      parameters:
+        - $ref: "#/components/parameters/XServiceName"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePaymentRequest"
+      responses:
+        "201":
+          description: Payment initiated successfully
+          headers:
+            X-Idempotent-Replay:
+              schema:
+                type: string
+                enum: ["true"]
+              description: Present when the response was served from the idempotency cache
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreatePaymentResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /payments/{id}:
+    delete:
+      operationId: CancelPayment
+      summary: Cancel a pending or initiated payment
+      tags: [payments]
+      parameters:
+        - $ref: "#/components/parameters/XServiceName"
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+          description: UUID of the payment returned by CreatePayment
+      responses:
+        "200":
+          description: Payment cancelled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CancelPaymentResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  parameters:
+    XServiceName:
+      name: X-Service-Name
+      in: header
+      required: true
+      schema:
+        type: string
+        example: order-service
+      description: |
+        Identifier of the calling service. Used for idempotency key scoping
+        and audit logging. Must be stable across retries.
+
+  schemas:
+    CreatePaymentRequest:
+      type: object
+      required:
+        - reference_id
+        - amount
+        - currency
+        - gateway_type
+        - payment_method_type
+        - customer_name
+        - customer_email
+      properties:
+        reference_id:
+          type: string
+          x-go-name: ReferenceID
+          description: Caller-assigned stable identifier for this payment (used as idempotency seed)
+          example: "order-9f3a1b"
+        amount:
+          type: integer
+          format: int64
+          description: Amount in the smallest currency unit (e.g. IDR uses no sub-unit, so 15000 = Rp 15.000)
+          example: 150000
+        currency:
+          type: string
+          description: ISO 4217 currency code
+          example: IDR
+        gateway_type:
+          type: string
+          x-go-name: GatewayType
+          enum: [MIDTRANS]
+          description: Payment gateway to route through
+        payment_method_type:
+          type: string
+          x-go-name: PaymentMethodType
+          enum: [VIRTUAL_ACCOUNT, QRIS]
+          description: Broad payment method category
+        bank_code:
+          type: string
+          x-go-name: BankCode
+          description: Required when payment_method_type is VIRTUAL_ACCOUNT (e.g. BCA, BNI, BRI)
+          example: BCA
+        customer_name:
+          type: string
+          x-go-name: CustomerName
+          example: Budi Santoso
+        customer_email:
+          type: string
+          format: email
+          x-go-type: string
+          x-go-name: CustomerEmail
+          example: budi@example.com
+        customer_phone:
+          type: string
+          x-go-name: CustomerPhone
+          example: "+6281234567890"
+        customer_external_id:
+          type: string
+          x-go-name: CustomerExternalID
+          description: Caller-side customer identifier for reconciliation
+          example: "usr-4421"
+        description:
+          type: string
+          example: Payment for order-9f3a1b
+        expired_at:
+          type: string
+          format: date-time
+          x-go-name: ExpiredAt
+          nullable: true
+          description: Desired expiry time; gateway may enforce its own minimum/maximum
+        metadata:
+          type: object
+          x-go-name: Metadata
+          x-go-type: "map[string]any"
+          additionalProperties: true
+          description: Arbitrary caller-defined key-value pairs passed through to the gateway
+
+    CreatePaymentResponse:
+      type: object
+      required:
+        - payment_id
+        - reference_id
+        - status
+        - amount
+        - currency
+        - created_at
+      properties:
+        payment_id:
+          type: string
+          x-go-name: PaymentID
+          x-go-type: string
+          format: uuid
+          description: PayGate-assigned payment identifier
+          example: "550e8400-e29b-41d4-a716-446655440000"
+        reference_id:
+          type: string
+          x-go-name: ReferenceID
+          description: Echo of the caller-supplied reference_id
+        status:
+          type: string
+          enum:
+            - INITIATED
+            - PENDING
+            - PROCESSING
+            - COMPLETED
+            - FAILED
+            - CANCELLED
+            - EXPIRED
+            - REFUND_REQUESTED
+            - REFUNDED
+            - REFUND_FAILED
+        amount:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        payment_instructions:
+          type: object
+          x-go-name: PaymentInstructions
+          x-go-type: "map[string]any"
+          additionalProperties: true
+          description: Gateway-specific fulfilment instructions (e.g. virtual account number, QR code URL)
+        created_at:
+          type: string
+          x-go-name: CreatedAt
+          format: date-time
+
+    CancelPaymentResponse:
+      type: object
+      required:
+        - payment_id
+        - status
+      properties:
+        payment_id:
+          type: string
+          x-go-name: PaymentID
+          x-go-type: string
+          format: uuid
+        status:
+          type: string
+          enum: [CANCELLED]
+
+    ErrorResponse:
+      type: object
+      description: |
+        All error responses share this shape. The `code` field is a machine-readable
+        constant that maps to `apperror.Code` on the server.
+      required:
+        - code
+        - message
+      properties:
+        code:
+          type: string
+          enum:
+            - NOT_FOUND
+            - ALREADY_EXISTS
+            - INVALID_INPUT
+            - INVALID_STATE
+            - GATEWAY_ERROR
+            - IDEMPOTENCY_CONFLICT
+            - INTERNAL_ERROR
+        message:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Invalid or malformed request payload
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Conflict:
+      description: Duplicate resource or idempotency key conflict
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    NotFound:
+      description: Payment not found
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    UnprocessableEntity:
+      description: State transition not allowed for the payment's current status
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    InternalError:
+      description: Unexpected internal server error
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"

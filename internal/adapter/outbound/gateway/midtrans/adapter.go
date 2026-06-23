@@ -109,7 +109,7 @@ func (a *Adapter) post(ctx context.Context, path string, body map[string]any) (m
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 
 	var out map[string]any
 	if err = json.NewDecoder(res.Body).Decode(&out); err != nil {
@@ -131,7 +131,7 @@ func (a *Adapter) get(ctx context.Context, path string) (map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	var out map[string]any
 	_ = json.NewDecoder(res.Body).Decode(&out)
 	return out, nil
