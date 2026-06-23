@@ -6,6 +6,7 @@ import (
 	"errors"
 
 	"github.com/Trisentosa/payment-module/internal/adapter/outbound/postgres/db"
+	"github.com/Trisentosa/payment-module/internal/application/ports"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
 	"github.com/Trisentosa/payment-module/internal/infrastructure/logger"
 	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
@@ -16,12 +17,13 @@ import (
 )
 
 type PaymentRepo struct {
-	pool *pgxpool.Pool
-	q    *db.Queries
+	pool   *pgxpool.Pool
+	q      *db.Queries
+	outbox ports.OutboxWriter
 }
 
-func NewPaymentRepo(pool *pgxpool.Pool) *PaymentRepo {
-	return &PaymentRepo{pool: pool, q: db.New(pool)}
+func NewPaymentRepo(pool *pgxpool.Pool, outbox ports.OutboxWriter) *PaymentRepo {
+	return &PaymentRepo{pool: pool, q: db.New(pool), outbox: outbox}
 }
 
 func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
@@ -31,6 +33,8 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 	if err != nil {
 		return err
 	}
+
+	isNew := isNewPayment(p)
 
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -44,28 +48,39 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 
 	qtx := r.q.WithTx(tx)
 
-	err = qtx.InsertPayment(ctx, db.InsertPaymentParams{
-		ID:                     p.ID,
-		ReferenceID:            p.ReferenceID,
-		CallerService:          p.CallerService,
-		GatewayType:            string(p.GatewayType),
-		GatewayTransactionID:   toNullableString(p.GatewayTransactionID),
-		Status:                 string(p.Status),
-		Amount:                 p.Amount.Amount,
-		Currency:               p.Amount.Currency,
-		PaymentMethodType:      toNullableString(p.PaymentMethodType),
-		CustomerInfo:           customerInfoJSON,
-		Metadata:               metadataJSON,
-		GatewayRequestPayload:  nil,
-		GatewayResponsePayload: nil,
-		Description:            pgtype.Text{String: p.Description, Valid: p.Description != ""},
-		ExpiredAt:              p.ExpiredAt,
-		PaidAt:                 p.PaidAt,
-		CreatedAt:              pgtype.Timestamptz{Time: p.CreatedAt, Valid: true},
-		UpdatedAt:              pgtype.Timestamptz{Time: p.UpdatedAt, Valid: true},
-	})
+	if isNew {
+		err = qtx.InsertPayment(ctx, db.InsertPaymentParams{
+			ID:                     p.ID,
+			ReferenceID:            p.ReferenceID,
+			CallerService:          p.CallerService,
+			GatewayType:            string(p.GatewayType),
+			GatewayTransactionID:   toNullableString(p.GatewayTransactionID),
+			Status:                 string(p.Status),
+			Amount:                 p.Amount.Amount,
+			Currency:               p.Amount.Currency,
+			PaymentMethodType:      toNullableString(p.PaymentMethodType),
+			CustomerInfo:           customerInfoJSON,
+			Metadata:               metadataJSON,
+			GatewayRequestPayload:  nil,
+			GatewayResponsePayload: marshalJSONOrNil(p.GatewayResponsePayload),
+			Description:            pgtype.Text{String: p.Description, Valid: p.Description != ""},
+			ExpiredAt:              p.ExpiredAt,
+			PaidAt:                 p.PaidAt,
+			CreatedAt:              pgtype.Timestamptz{Time: p.CreatedAt, Valid: true},
+			UpdatedAt:              pgtype.Timestamptz{Time: p.UpdatedAt, Valid: true},
+		})
+	} else {
+		err = qtx.UpdatePaymentFull(ctx, db.UpdatePaymentFullParams{
+			ID:                     p.ID,
+			GatewayTransactionID:   toNullableString(p.GatewayTransactionID),
+			Status:                 string(p.Status),
+			GatewayResponsePayload: marshalJSONOrNil(p.GatewayResponsePayload),
+			PaidAt:                 p.PaidAt,
+			UpdatedAt:              pgtype.Timestamptz{Time: p.UpdatedAt, Valid: true},
+		})
+	}
 	if err != nil {
-		return apperror.Internal("insert payment", err)
+		return apperror.Internal("persist payment", err)
 	}
 
 	events := p.PopEvents()
@@ -78,6 +93,13 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 		})
 		if err != nil {
 			return apperror.Internal("insert payment_event", err)
+		}
+	}
+
+	outboxEvents := toOutboxEvents(events)
+	if len(outboxEvents) > 0 {
+		if err = r.outbox.WriteWithTx(ctx, tx, outboxEvents); err != nil {
+			return err
 		}
 	}
 
@@ -188,4 +210,36 @@ func toDomain(row db.Payment) (*payment.Payment, error) {
 		}
 	}
 	return p, nil
+}
+
+// isNewPayment returns true if the payment has a PaymentInitiated event pending,
+// meaning it has never been persisted before.
+func isNewPayment(p *payment.Payment) bool {
+	for _, e := range p.PeekEvents() {
+		if _, ok := e.(payment.PaymentInitiated); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func toOutboxEvents(events []payment.DomainEvent) []ports.OutboxEvent {
+	out := make([]ports.OutboxEvent, 0, len(events))
+	for _, e := range events {
+		payload, _ := json.Marshal(e)
+		out = append(out, ports.OutboxEvent{
+			AggregateID: e.AggregateID(),
+			EventType:   e.EventType(),
+			Payload:     payload,
+		})
+	}
+	return out
+}
+
+func marshalJSONOrNil(v map[string]any) []byte {
+	if v == nil {
+		return nil
+	}
+	b, _ := json.Marshal(v)
+	return b
 }

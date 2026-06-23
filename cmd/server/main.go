@@ -11,7 +11,15 @@ import (
 	"syscall"
 	"time"
 
+	httpAdapter "github.com/Trisentosa/payment-module/internal/adapter/inbound/http"
 	httpMiddleware "github.com/Trisentosa/payment-module/internal/adapter/inbound/http/middleware"
+	"github.com/Trisentosa/payment-module/internal/adapter/outbound/gateway"
+	"github.com/Trisentosa/payment-module/internal/adapter/outbound/gateway/midtrans"
+	postgresAdapter "github.com/Trisentosa/payment-module/internal/adapter/outbound/postgres"
+	"github.com/Trisentosa/payment-module/internal/adapter/outbound/rabbitmq"
+	"github.com/Trisentosa/payment-module/internal/application/command"
+	"github.com/Trisentosa/payment-module/internal/application/ports"
+	"github.com/Trisentosa/payment-module/internal/infrastructure/cache"
 	infraDB "github.com/Trisentosa/payment-module/internal/infrastructure/db"
 	"github.com/Trisentosa/payment-module/internal/infrastructure/config"
 	"github.com/Trisentosa/payment-module/internal/infrastructure/logger"
@@ -39,15 +47,48 @@ func main() {
 
 	log.Info("connected to postgres")
 
+	// Infrastructure stubs (real implementations added in TD-03)
+	cacheClient := &cache.NoopClient{}
+	publisher := &rabbitmq.NoopPublisher{}
+
+	// Outbox
+	outboxWriter := postgresAdapter.NewOutboxWriter()
+	outboxWorker := postgresAdapter.NewOutboxWorker(pool, publisher, 50, 5*time.Second)
+
+	// Repo
+	paymentRepo := postgresAdapter.NewPaymentRepo(pool, outboxWriter)
+
+	// Gateway
+	gatewayFactory := gateway.NewFactory(map[string]ports.GatewayPort{
+		"MIDTRANS": midtrans.NewAdapter(midtrans.Config{
+			ServerKey: cfg.Midtrans.ServerKey,
+			BaseURL:   cfg.Midtrans.BaseURL,
+			Timeout:   time.Duration(cfg.Midtrans.TimeoutMs) * time.Millisecond,
+		}),
+	})
+
+	// Command handlers
+	createPaymentHandler := command.NewCreatePaymentHandler(paymentRepo, gatewayFactory, outboxWriter)
+	processCallbackHandler := command.NewProcessCallbackHandler(paymentRepo, gatewayFactory, cacheClient)
+	cancelPaymentHandler := command.NewCancelPaymentHandler(paymentRepo, gatewayFactory)
+
+	// Idempotency
+	idemService := httpMiddleware.NewIdempotencyService(cacheClient, 24*time.Hour)
+
+	// HTTP handlers
+	paymentHandler := httpAdapter.NewPaymentHandler(createPaymentHandler, cancelPaymentHandler, idemService)
+	webhookHandler := httpAdapter.NewWebhookHandler(processCallbackHandler)
+
+	// Router
 	mux := http.NewServeMux()
 
-	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("GET /readyz", func(w http.ResponseWriter, r *http.Request) {
 		if err := pool.Ping(r.Context()); err != nil {
 			logger.FromContext(r.Context()).Error("readiness check failed", "err", err)
 			w.Header().Set("Content-Type", "application/json")
@@ -60,6 +101,10 @@ func main() {
 		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	})
 
+	mux.HandleFunc("POST /payments", paymentHandler.CreatePayment)
+	mux.HandleFunc("DELETE /payments/{id}", paymentHandler.CancelPayment)
+	mux.HandleFunc("POST /webhooks/midtrans", webhookHandler.HandleMidtrans)
+
 	handler := httpMiddleware.RequestLogger(log)(mux)
 
 	srv := &http.Server{
@@ -69,6 +114,9 @@ func main() {
 		WriteTimeout: 10 * time.Second,
 		IdleTimeout:  60 * time.Second,
 	}
+
+	// Start outbox worker
+	go outboxWorker.Run(ctx)
 
 	go func() {
 		log.Info("server starting", "port", cfg.Server.Port)

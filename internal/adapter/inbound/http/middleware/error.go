@@ -8,6 +8,8 @@ import (
 	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
 )
 
+var ErrInvalidJSON = apperror.InvalidInput("invalid or malformed JSON body")
+
 var codeToHTTP = map[apperror.Code]int{
 	apperror.CodeNotFound:            http.StatusNotFound,
 	apperror.CodeAlreadyExists:       http.StatusConflict,

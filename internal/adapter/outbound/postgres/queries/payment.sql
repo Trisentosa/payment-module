@@ -45,3 +45,12 @@ INSERT INTO payments (
 
 -- name: UpdatePaymentStatus :exec
 UPDATE payments SET status = $1, updated_at = NOW() WHERE id = $2;
+
+-- name: UpdatePaymentFull :exec
+UPDATE payments
+SET gateway_transaction_id   = $2,
+    status                   = $3,
+    gateway_response_payload = $4,
+    paid_at                  = $5,
+    updated_at               = $6
+WHERE id = $1;

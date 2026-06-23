@@ -97,11 +97,47 @@ func (p *Payment) MarkPending(gatewayTxID string, gatewayResp map[string]any) er
 	return nil
 }
 
+// MarkCompleted transitions to COMPLETED from PENDING or PROCESSING.
+func (p *Payment) MarkCompleted(paidAt time.Time) error {
+	if p.Status != StatusPending && p.Status != StatusProcessing {
+		return apperror.InvalidState("cannot complete from: " + string(p.Status))
+	}
+	now := time.Now().UTC()
+	p.Status = StatusCompleted
+	p.PaidAt = &paidAt
+	p.UpdatedAt = now
+	p.raise(PaymentCompleted{PaymentID: p.ID, PaidAt: paidAt, OccurredAt: now})
+	return nil
+}
+
+// MarkFailed transitions to FAILED from any non-terminal state.
+func (p *Payment) MarkFailed(errorCode, errorMessage string) {
+	now := time.Now().UTC()
+	p.Status = StatusFailed
+	p.UpdatedAt = now
+	p.raise(PaymentFailed{PaymentID: p.ID, ErrorCode: errorCode, ErrorMessage: errorMessage, OccurredAt: now})
+}
+
+// Cancel transitions to CANCELLED from PENDING or PROCESSING.
+func (p *Payment) Cancel() error {
+	if p.Status != StatusPending && p.Status != StatusProcessing {
+		return apperror.InvalidState("cannot cancel from: " + string(p.Status))
+	}
+	now := time.Now().UTC()
+	p.Status = StatusCancelled
+	p.UpdatedAt = now
+	p.raise(PaymentCancelled{PaymentID: p.ID, OccurredAt: now})
+	return nil
+}
+
 // PopEvents returns and clears the uncommitted event list.
 func (p *Payment) PopEvents() []DomainEvent {
 	evts := p.events
 	p.events = nil
 	return evts
 }
+
+// PeekEvents returns the uncommitted event list without clearing it.
+func (p *Payment) PeekEvents() []DomainEvent { return p.events }
 
 func (p *Payment) raise(e DomainEvent) { p.events = append(p.events, e) }

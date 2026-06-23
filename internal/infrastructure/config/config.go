@@ -40,6 +40,8 @@ type RabbitMQ struct {
 type Midtrans struct {
 	ServerKey string
 	Env       string
+	BaseURL   string
+	TimeoutMs int
 }
 
 type Log struct {
@@ -59,6 +61,16 @@ func Load() (Config, error) {
 	serverPort, err := strconv.Atoi(getEnv("SERVER_PORT", "8080"))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid SERVER_PORT: %w", err)
+	}
+	midtransTimeoutMs, err := strconv.Atoi(getEnv("MIDTRANS_TIMEOUT_MS", "30000"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid MIDTRANS_TIMEOUT_MS: %w", err)
+	}
+
+	midtransEnv := getEnv("MIDTRANS_ENV", "sandbox")
+	midtransBaseURL := "https://api.sandbox.midtrans.com"
+	if midtransEnv == "production" {
+		midtransBaseURL = "https://api.midtrans.com"
 	}
 
 	return Config{
@@ -80,7 +92,9 @@ func Load() (Config, error) {
 		},
 		Midtrans: Midtrans{
 			ServerKey: getEnv("MIDTRANS_SERVER_KEY", ""),
-			Env:       getEnv("MIDTRANS_ENV", "sandbox"),
+			Env:       midtransEnv,
+			BaseURL:   midtransBaseURL,
+			TimeoutMs: midtransTimeoutMs,
 		},
 		Log: Log{
 			Level:  getEnv("LOG_LEVEL", "info"),

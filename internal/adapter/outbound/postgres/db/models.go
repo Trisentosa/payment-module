@@ -12,6 +12,28 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type IdempotencyKey struct {
+	Key          string
+	PaymentID    uuid.UUID
+	HttpStatus   int32
+	ResponseBody json.RawMessage
+	ExpiresAt    pgtype.Timestamptz
+	CreatedAt    pgtype.Timestamptz
+}
+
+type OutboxEvent struct {
+	ID          uuid.UUID
+	AggregateID uuid.UUID
+	EventType   string
+	Payload     json.RawMessage
+	Status      string
+	RetryCount  int32
+	LastError   pgtype.Text
+	ScheduledAt pgtype.Timestamptz
+	PublishedAt *time.Time
+	CreatedAt   pgtype.Timestamptz
+}
+
 type Payment struct {
 	ID                     uuid.UUID
 	ReferenceID            string
@@ -58,4 +80,18 @@ type PaymentEvent struct {
 	Payload        json.RawMessage
 	CreatedBy      string
 	CreatedAt      pgtype.Timestamptz
+}
+
+type Refund struct {
+	ID                     uuid.UUID
+	PaymentID              uuid.UUID
+	ReferenceID            string
+	GatewayRefundID        *string
+	Status                 string
+	Amount                 int64
+	Reason                 pgtype.Text
+	GatewayResponsePayload []byte
+	CreatedAt              pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
+	DeletedAt              *time.Time
 }

@@ -235,6 +235,37 @@ func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) er
 	return err
 }
 
+const updatePaymentFull = `-- name: UpdatePaymentFull :exec
+UPDATE payments
+SET gateway_transaction_id   = $2,
+    status                   = $3,
+    gateway_response_payload = $4,
+    paid_at                  = $5,
+    updated_at               = $6
+WHERE id = $1
+`
+
+type UpdatePaymentFullParams struct {
+	ID                     uuid.UUID
+	GatewayTransactionID   *string
+	Status                 string
+	GatewayResponsePayload []byte
+	PaidAt                 *time.Time
+	UpdatedAt              pgtype.Timestamptz
+}
+
+func (q *Queries) UpdatePaymentFull(ctx context.Context, arg UpdatePaymentFullParams) error {
+	_, err := q.db.Exec(ctx, updatePaymentFull,
+		arg.ID,
+		arg.GatewayTransactionID,
+		arg.Status,
+		arg.GatewayResponsePayload,
+		arg.PaidAt,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
 const updatePaymentStatus = `-- name: UpdatePaymentStatus :exec
 UPDATE payments SET status = $1, updated_at = NOW() WHERE id = $2
 `
