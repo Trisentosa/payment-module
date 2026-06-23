@@ -89,6 +89,18 @@ func runMigrations(t *testing.T, pool *pgxpool.Pool) {
 			created_by      VARCHAR(100) NOT NULL DEFAULT 'system',
 			created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
 		)`,
+		`CREATE TABLE IF NOT EXISTS outbox_events (
+			id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
+			aggregate_id UUID         NOT NULL,
+			event_type   VARCHAR(100) NOT NULL,
+			payload      JSONB        NOT NULL,
+			status       VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
+			retry_count  INT          NOT NULL DEFAULT 0,
+			last_error   TEXT,
+			scheduled_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
+			published_at TIMESTAMPTZ,
+			created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
+		)`,
 	}
 
 	for _, sql := range migrations {
@@ -111,7 +123,7 @@ func newTestPayment(referenceID string) *payment.Payment {
 
 func TestPaymentRepo_SaveAndFindByID(t *testing.T) {
 	pool := setupTestDB(t)
-	repo := pgxAdapter.NewPaymentRepo(pool)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
 	ctx := context.Background()
 
 	p := newTestPayment(fmt.Sprintf("REF-%s", uuid.New()))
@@ -143,7 +155,7 @@ func TestPaymentRepo_SaveAndFindByID(t *testing.T) {
 
 func TestPaymentRepo_FindByReference(t *testing.T) {
 	pool := setupTestDB(t)
-	repo := pgxAdapter.NewPaymentRepo(pool)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
 	ctx := context.Background()
 
 	refID := fmt.Sprintf("REF-%s", uuid.New())
@@ -163,7 +175,7 @@ func TestPaymentRepo_FindByReference(t *testing.T) {
 
 func TestPaymentRepo_FindByReference_NotFound(t *testing.T) {
 	pool := setupTestDB(t)
-	repo := pgxAdapter.NewPaymentRepo(pool)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
 	ctx := context.Background()
 
 	_, err := repo.FindByReference(ctx, "does-not-exist", "svc")
@@ -174,7 +186,7 @@ func TestPaymentRepo_FindByReference_NotFound(t *testing.T) {
 
 func TestPaymentRepo_FindByID_NotFound(t *testing.T) {
 	pool := setupTestDB(t)
-	repo := pgxAdapter.NewPaymentRepo(pool)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
 	ctx := context.Background()
 
 	_, err := repo.FindByID(ctx, uuid.New())
@@ -185,7 +197,7 @@ func TestPaymentRepo_FindByID_NotFound(t *testing.T) {
 
 func TestPaymentRepo_UpdateStatus(t *testing.T) {
 	pool := setupTestDB(t)
-	repo := pgxAdapter.NewPaymentRepo(pool)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
 	ctx := context.Background()
 
 	p := newTestPayment(fmt.Sprintf("REF-%s", uuid.New()))
@@ -205,7 +217,7 @@ func TestPaymentRepo_UpdateStatus(t *testing.T) {
 
 func TestPaymentRepo_Save_Idempotent(t *testing.T) {
 	pool := setupTestDB(t)
-	repo := pgxAdapter.NewPaymentRepo(pool)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
 	ctx := context.Background()
 
 	refID := fmt.Sprintf("REF-%s", uuid.New())
