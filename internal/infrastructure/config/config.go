@@ -13,10 +13,13 @@ type Config struct {
 	RabbitMQ RabbitMQ
 	Midtrans Midtrans
 	Log      Log
+	OTel     OTel
+	Admin    Admin
 }
 
 type Server struct {
-	Port int
+	Port        int
+	MetricsPort int
 }
 
 type DB struct {
@@ -49,6 +52,15 @@ type Log struct {
 	Format string
 }
 
+type OTel struct {
+	Endpoint    string
+	ServiceName string
+}
+
+type Admin struct {
+	Key string
+}
+
 func Load() (Config, error) {
 	dbPort, err := strconv.Atoi(getEnv("DB_PORT", "5432"))
 	if err != nil {
@@ -62,6 +74,10 @@ func Load() (Config, error) {
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid SERVER_PORT: %w", err)
 	}
+	metricsPort, err := strconv.Atoi(getEnv("METRICS_PORT", "9090"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid METRICS_PORT: %w", err)
+	}
 	midtransTimeoutMs, err := strconv.Atoi(getEnv("MIDTRANS_TIMEOUT_MS", "30000"))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid MIDTRANS_TIMEOUT_MS: %w", err)
@@ -74,7 +90,7 @@ func Load() (Config, error) {
 	}
 
 	return Config{
-		Server: Server{Port: serverPort},
+		Server: Server{Port: serverPort, MetricsPort: metricsPort},
 		DB: DB{
 			Host:     getEnv("DB_HOST", "localhost"),
 			Port:     dbPort,
@@ -99,6 +115,13 @@ func Load() (Config, error) {
 		Log: Log{
 			Level:  getEnv("LOG_LEVEL", "info"),
 			Format: getEnv("LOG_FORMAT", "text"),
+		},
+		OTel: OTel{
+			Endpoint:    getEnv("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+			ServiceName: getEnv("OTEL_SERVICE_NAME", "paygate-service"),
+		},
+		Admin: Admin{
+			Key: getEnv("ADMIN_API_KEY", ""),
 		},
 	}, nil
 }

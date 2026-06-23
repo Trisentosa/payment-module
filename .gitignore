@@ -6,3 +6,4 @@
 *.out
 vendor/
 .DS_Store
+.claude/

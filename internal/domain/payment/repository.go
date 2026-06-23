@@ -10,6 +10,8 @@ import (
 type ListFilter struct {
 	Status        string
 	CallerService string
+	GatewayType   string
+	ReferenceID   string // prefix match
 	From          *time.Time
 	To            *time.Time
 	Cursor        *time.Time // created_at of last item in previous page

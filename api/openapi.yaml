@@ -14,6 +14,9 @@ info:
     **Error shape**: all 4xx/5xx responses share the `ErrorResponse` schema.
     The `code` field maps directly to `apperror.Code` values in the server.
 
+    **Admin API**: routes under `/api/v1/admin/` require the `X-Admin-Key` header.
+    They are intended for internal ops tooling and dashboards, not for service-to-service integration.
+
 servers:
   - url: /
     description: Local / default (path-relative)
@@ -21,8 +24,205 @@ servers:
 tags:
   - name: payments
     description: Payment lifecycle operations
+  - name: admin
+    description: Internal admin and ops endpoints (require X-Admin-Key)
 
 paths:
+  /api/v1/admin/payments:
+    get:
+      operationId: AdminListPayments
+      summary: List payments with admin filters and cursor pagination
+      tags: [admin]
+      security:
+        - AdminKey: []
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: caller_service
+          in: query
+          schema:
+            type: string
+        - name: gateway_type
+          in: query
+          schema:
+            type: string
+        - name: reference_id
+          in: query
+          description: Prefix match on reference_id
+          schema:
+            type: string
+        - name: from
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: cursor
+          in: query
+          description: Opaque cursor (created_at of last row in previous page)
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+      responses:
+        "200":
+          description: Paginated payment list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminListPaymentsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/admin/payments/{id}:
+    get:
+      operationId: AdminGetPaymentDetail
+      summary: Get full payment detail including attempts and event history
+      tags: [admin]
+      security:
+        - AdminKey: []
+      parameters:
+        - $ref: "#/components/parameters/AdminPaymentID"
+      responses:
+        "200":
+          description: Payment detail with attempts and events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminPaymentDetailResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/admin/payments/{id}/attempts:
+    get:
+      operationId: AdminListPaymentAttempts
+      summary: List all gateway attempts for a payment ordered by attempt number
+      tags: [admin]
+      security:
+        - AdminKey: []
+      parameters:
+        - $ref: "#/components/parameters/AdminPaymentID"
+      responses:
+        "200":
+          description: Attempt list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminAttemptsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/admin/payments/{id}/events:
+    get:
+      operationId: AdminListPaymentEvents
+      summary: List the full state-machine event log for a payment ordered by sequence number
+      tags: [admin]
+      security:
+        - AdminKey: []
+      parameters:
+        - $ref: "#/components/parameters/AdminPaymentID"
+      responses:
+        "200":
+          description: Event log
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminEventsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/admin/payments/{id}/refunds:
+    get:
+      operationId: AdminListRefunds
+      summary: List refunds for a payment
+      tags: [admin]
+      security:
+        - AdminKey: []
+      parameters:
+        - $ref: "#/components/parameters/AdminPaymentID"
+      responses:
+        "200":
+          description: Refund list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminRefundsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/admin/payments/{id}/expire:
+    post:
+      operationId: AdminForceExpire
+      summary: Force-expire a stuck PENDING or INITIATED payment through the domain aggregate
+      tags: [admin]
+      security:
+        - AdminKey: []
+      parameters:
+        - $ref: "#/components/parameters/AdminPaymentID"
+      responses:
+        "200":
+          description: Payment expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminForceExpireResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /api/v1/admin/outbox/stats:
+    get:
+      operationId: AdminOutboxStats
+      summary: Current outbox health — pending, published, and failed event counts
+      tags: [admin]
+      security:
+        - AdminKey: []
+      responses:
+        "200":
+          description: Outbox statistics for the last hour
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminOutboxStatsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /payments:
     post:
       operationId: CreatePayment
@@ -85,7 +285,23 @@ paths:
           $ref: "#/components/responses/InternalError"
 
 components:
+  securitySchemes:
+    AdminKey:
+      type: apiKey
+      in: header
+      name: X-Admin-Key
+      description: Elevated ops key required for all admin endpoints
+
   parameters:
+    AdminPaymentID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: UUID of the payment
+
     XServiceName:
       name: X-Service-Name
       in: header
@@ -98,6 +314,239 @@ components:
         and audit logging. Must be stable across retries.
 
   schemas:
+    AdminPayment:
+      type: object
+      description: Payment summary returned by admin list and detail endpoints
+      required: [id, reference_id, caller_service, status, gateway, amount, currency, payment_method_type, customer, created_at, updated_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          x-go-name: ID
+        reference_id:
+          type: string
+          x-go-name: ReferenceID
+        caller_service:
+          type: string
+          x-go-name: CallerService
+        status:
+          type: string
+          enum: [INITIATED, PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED, EXPIRED, REFUND_REQUESTED, REFUNDED, REFUND_FAILED]
+        gateway:
+          type: string
+        gateway_transaction_id:
+          type: string
+          x-go-name: GatewayTransactionID
+        amount:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        payment_method_type:
+          type: string
+          x-go-name: PaymentMethodType
+        customer:
+          type: object
+          additionalProperties: true
+          x-go-type: "map[string]any"
+        metadata:
+          type: object
+          additionalProperties: true
+          x-go-type: "map[string]any"
+        description:
+          type: string
+        expired_at:
+          type: string
+          format: date-time
+          x-go-name: ExpiredAt
+          nullable: true
+        paid_at:
+          type: string
+          format: date-time
+          x-go-name: PaidAt
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          x-go-name: CreatedAt
+        updated_at:
+          type: string
+          format: date-time
+          x-go-name: UpdatedAt
+
+    AdminListPaymentsResponse:
+      type: object
+      required: [data, meta]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminPayment"
+        meta:
+          type: object
+          required: [count, has_more]
+          properties:
+            count:
+              type: integer
+            next_cursor:
+              type: string
+              format: date-time
+              x-go-name: NextCursor
+            has_more:
+              type: boolean
+              x-go-name: HasMore
+
+    AdminAttempt:
+      type: object
+      description: Single gateway attempt record
+      required: [id, attempt_number, status, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          x-go-name: ID
+        attempt_number:
+          type: integer
+          format: int32
+          x-go-name: AttemptNumber
+        status:
+          type: string
+        error_code:
+          type: string
+          x-go-name: ErrorCode
+        gateway_transaction_id:
+          type: string
+          x-go-name: GatewayTransactionID
+        duration_ms:
+          type: integer
+          format: int64
+          x-go-name: DurationMs
+        created_at:
+          type: string
+          format: date-time
+          x-go-name: CreatedAt
+
+    AdminEvent:
+      type: object
+      description: Domain event record from the payment event log
+      required: [id, event_type, sequence_number, payload, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          x-go-name: ID
+        event_type:
+          type: string
+          x-go-name: EventType
+        sequence_number:
+          type: integer
+          format: int32
+          x-go-name: SequenceNumber
+        payload:
+          type: object
+          additionalProperties: true
+          x-go-type: "map[string]any"
+        created_at:
+          type: string
+          format: date-time
+          x-go-name: CreatedAt
+
+    AdminRefund:
+      type: object
+      required: [id, reference_id, status, amount, created_at]
+      properties:
+        id:
+          type: string
+          format: uuid
+          x-go-name: ID
+        reference_id:
+          type: string
+          x-go-name: ReferenceID
+        gateway_refund_id:
+          type: string
+          x-go-name: GatewayRefundID
+        status:
+          type: string
+        amount:
+          type: integer
+          format: int64
+        reason:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+          x-go-name: CreatedAt
+
+    AdminPaymentDetailResponse:
+      type: object
+      required: [payment_id, attempts, events]
+      properties:
+        payment_id:
+          type: string
+          format: uuid
+          x-go-name: PaymentID
+        attempts:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminAttempt"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminEvent"
+
+    AdminAttemptsResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminAttempt"
+
+    AdminEventsResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminEvent"
+
+    AdminRefundsResponse:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminRefund"
+
+    AdminForceExpireResponse:
+      type: object
+      required: [payment_id, status]
+      properties:
+        payment_id:
+          type: string
+          format: uuid
+          x-go-name: PaymentID
+        status:
+          type: string
+          enum: [EXPIRED]
+
+    AdminOutboxStatsResponse:
+      type: object
+      required: [pending, published, failed, oldest_pending_age_seconds]
+      properties:
+        pending:
+          type: integer
+        published:
+          type: integer
+        failed:
+          type: integer
+        oldest_pending_age_seconds:
+          type: integer
+          x-go-name: OldestPendingAgeSeconds
+
     CreatePaymentRequest:
       type: object
       required:
@@ -261,6 +710,12 @@ components:
           type: string
 
   responses:
+    Unauthorized:
+      description: Missing or invalid X-Admin-Key header
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
     BadRequest:
       description: Invalid or malformed request payload
       content:

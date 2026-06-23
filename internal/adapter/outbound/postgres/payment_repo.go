@@ -264,6 +264,16 @@ func (r *PaymentRepo) ListPaginated(ctx context.Context, f payment.ListFilter) (
 		args = append(args, f.CallerService)
 		i++
 	}
+	if f.GatewayType != "" {
+		where = append(where, fmt.Sprintf("gateway_type = $%d", i))
+		args = append(args, f.GatewayType)
+		i++
+	}
+	if f.ReferenceID != "" {
+		where = append(where, fmt.Sprintf("reference_id LIKE $%d", i))
+		args = append(args, f.ReferenceID+"%")
+		i++
+	}
 	if f.From != nil {
 		where = append(where, fmt.Sprintf("created_at >= $%d", i))
 		args = append(args, *f.From)

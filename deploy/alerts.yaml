@@ -1,0 +1,32 @@
+groups:
+  - name: paygate
+    rules:
+      - alert: PaygateHighErrorRate
+        expr: |
+          rate(paygate_http_request_duration_seconds_count{status=~"5.."}[5m])
+          / rate(paygate_http_request_duration_seconds_count[5m]) > 0.01
+        for: 2m
+        annotations:
+          summary: "PayGate HTTP error rate > 1%"
+
+      - alert: PaygateGatewayLatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            rate(paygate_gateway_call_duration_seconds_bucket{gateway="MIDTRANS"}[5m])
+          ) > 5
+        for: 3m
+        annotations:
+          summary: "Midtrans p99 call latency > 5s"
+
+      - alert: PaygateOutboxBacklog
+        expr: paygate_outbox_pending_count > 500
+        for: 5m
+        annotations:
+          summary: "Outbox backlog > 500 events — worker may be stuck"
+
+      - alert: PaygateOutboxFailedEvents
+        expr: |
+          increase(paygate_outbox_events_failed_total[10m]) > 10
+        for: 1m
+        annotations:
+          summary: "More than 10 outbox events failed in the last 10 minutes"
