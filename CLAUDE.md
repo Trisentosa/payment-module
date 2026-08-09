@@ -38,3 +38,13 @@ This runs `build → lint → test` in order. All three must pass with zero erro
 3. Never call `slog.Default()` directly — always use `logger.FromContext(ctx)`.
 4. All DB writes that emit domain events MUST do so in a single transaction.
 5. No foreign keys in the database — see [docs/database.md](docs/database.md).
+
+## Agent skills
+
+### Issue tracker
+
+Issues live in GitHub Issues (Trisentosa/payment-module), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context — one `CONTEXT.md` (not yet created) + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
