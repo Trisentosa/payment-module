@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/Trisentosa/payment-module/internal/application/ports"
@@ -70,6 +71,17 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 		return nil, err
 	}
 
+	// Check before calling the gateway, so a reused reference never opens a second transaction.
+	// The unique constraint in Save still catches two requests racing past this check.
+	existing, err := h.repo.FindByReference(ctx, cmd.ReferenceID, cmd.CallerService)
+	switch {
+	case err == nil:
+		return nil, apperror.AlreadyExists(fmt.Sprintf(
+			"payment %s already exists for reference_id %s (status %s)", existing.ID, cmd.ReferenceID, existing.Status))
+	case !apperror.IsCode(err, apperror.CodeNotFound):
+		return nil, err
+	}
+
 	gw, err := h.factory.Get(cmd.GatewayType)
 	if err != nil {
 		return nil, apperror.InvalidInput("unsupported gateway: " + cmd.GatewayType)
@@ -93,7 +105,9 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 	})
 	if err != nil {
 		p.MarkFailed("GATEWAY_ERROR", err.Error())
-		_ = h.repo.Save(ctx, p)
+		if saveErr := h.repo.Save(ctx, p); saveErr != nil {
+			log.Warn("failed to record gateway failure", "payment_id", p.ID, "err", saveErr)
+		}
 		return nil, err
 	}
 

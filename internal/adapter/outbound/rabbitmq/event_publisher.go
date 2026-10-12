@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
@@ -16,6 +17,10 @@ import (
 const (
 	exchange    = "paygate.payments"
 	contentType = "application/json"
+
+	// confirmTimeout bounds how long Publish waits for the broker's ack, so a lost
+	// confirm fails one outbox row (which is retried) instead of stalling the worker.
+	confirmTimeout = 10 * time.Second
 )
 
 var routingKey = map[string]string{
@@ -32,6 +37,7 @@ var routingKey = map[string]string{
 type Publisher struct {
 	conn    *amqp.Connection
 	channel *amqp.Channel
+	mu      sync.Mutex // serializes publishes on the shared channel
 }
 
 func NewPublisher(url string) (*Publisher, error) {
@@ -98,26 +104,33 @@ func (p *Publisher) Publish(ctx context.Context, event ports.DomainEvent) error 
 		return apperror.Internal("marshal event envelope", err)
 	}
 
-	confirms := p.channel.NotifyPublish(make(chan amqp.Confirmation, 1))
+	ctx, cancel := context.WithTimeout(ctx, confirmTimeout)
+	defer cancel()
 
-	err = p.channel.PublishWithContext(ctx, exchange, rk, false, false, amqp.Publishing{
+	// A deferred confirmation tracks this one publish. Registering a NotifyPublish
+	// listener per call instead leaks listeners, and amqp091 blocks on a full one.
+	p.mu.Lock()
+	confirm, err := p.channel.PublishWithDeferredConfirmWithContext(ctx, exchange, rk, false, false, amqp.Publishing{
 		ContentType:  contentType,
 		DeliveryMode: amqp.Persistent,
 		MessageId:    event.ID.String(),
 		Timestamp:    time.Now().UTC(),
 		Body:         body,
 	})
+	p.mu.Unlock()
 	if err != nil {
 		return apperror.GatewayError("rabbitmq publish", err)
 	}
+	if confirm == nil {
+		return apperror.Internal("rabbitmq channel is not in confirm mode", nil)
+	}
 
-	select {
-	case confirm := <-confirms:
-		if !confirm.Ack {
-			return apperror.GatewayError("rabbitmq nack received", nil)
-		}
-	case <-ctx.Done():
-		return apperror.Internal("publish context cancelled", ctx.Err())
+	acked, err := confirm.WaitContext(ctx)
+	if err != nil {
+		return apperror.GatewayError("rabbitmq confirm not received", err)
+	}
+	if !acked {
+		return apperror.GatewayError("rabbitmq nack received", nil)
 	}
 
 	log.Info("event published", "routing_key", rk, "aggregate_id", event.AggregateID)

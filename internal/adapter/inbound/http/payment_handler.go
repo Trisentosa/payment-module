@@ -12,6 +12,8 @@ import (
 	"github.com/Trisentosa/payment-module/internal/application/command"
 	"github.com/Trisentosa/payment-module/internal/application/query"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
+	"github.com/Trisentosa/payment-module/internal/infrastructure/logger"
+	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
 )
 
 type PaymentHandler struct {
@@ -48,19 +50,35 @@ func (h *PaymentHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+	log := logger.FromContext(ctx)
+
 	callerService := r.Header.Get("X-Service-Name")
 	idemKey := middleware.IdempotencyKey(callerService, req.ReferenceID)
+	reqHash := middleware.RequestFingerprint(req)
 
-	cached, isDuplicate, _ := h.idem.CheckOrAcquire(r.Context(), idemKey)
-	if isDuplicate && cached != nil {
+	idem, idemErr := h.idem.Begin(ctx, idemKey, reqHash)
+	if idemErr != nil {
+		// Fail open: the unique (reference_id, caller_service) constraint still blocks duplicates.
+		log.Warn("idempotency cache unavailable, continuing without it", "err", idemErr)
+	}
+	switch idem.Outcome {
+	case middleware.IdempotencyReplay:
 		w.Header().Set("X-Idempotent-Replay", "true")
 		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusCreated)
-		_, _ = w.Write(cached)
+		w.WriteHeader(idem.Status)
+		_, _ = w.Write(idem.Body)
+		return
+	case middleware.IdempotencyInFlight:
+		middleware.WriteError(w, apperror.IdempotencyConflict("a request for this reference_id is still in progress; retry shortly"))
+		return
+	case middleware.IdempotencyMismatch:
+		middleware.WriteError(w, apperror.IdempotencyConflict("reference_id was already used with a different request payload"))
 		return
 	}
+	holdsKey := idemErr == nil
 
-	result, err := h.createHandler.Handle(r.Context(), command.CreatePaymentCommand{
+	result, err := h.createHandler.Handle(ctx, command.CreatePaymentCommand{
 		ReferenceID:        req.ReferenceID,
 		CallerService:      callerService,
 		Amount:             req.Amount,
@@ -77,13 +95,24 @@ func (h *PaymentHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		Metadata:           derefMap(req.Metadata),
 	})
 	if err != nil {
+		// Free the key so a corrected retry can run. A retry after a gateway failure
+		// then gets ALREADY_EXISTS, because the failed payment holds the reference.
+		if holdsKey {
+			if relErr := h.idem.Release(ctx, idemKey); relErr != nil {
+				log.Warn("idempotency key release failed", "err", relErr)
+			}
+		}
 		middleware.WriteError(w, err)
 		return
 	}
 
 	resp := toCreatePaymentResponse(result)
 	body, _ := json.Marshal(resp)
-	_ = h.idem.StoreResponse(r.Context(), idemKey, result.Payment.ID, http.StatusCreated, body)
+	if holdsKey {
+		if storeErr := h.idem.Complete(ctx, idemKey, reqHash, http.StatusCreated, body); storeErr != nil {
+			log.Warn("idempotency response store failed", "payment_id", result.Payment.ID, "err", storeErr)
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha512"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -56,17 +58,66 @@ func (a *Adapter) CreateTransaction(ctx context.Context, req ports.CreateTransac
 	}, nil
 }
 
-func (a *Adapter) VerifyWebhookSignature(payload []byte, signature string) error {
-	var n map[string]string
+// notification holds the HTTP notification fields PayGate reads. Midtrans sends many more
+// (va_numbers, payment_amounts, …), some of them arrays, so this must stay a typed struct.
+type notification struct {
+	TransactionID     string `json:"transaction_id"`
+	OrderID           string `json:"order_id"`
+	StatusCode        string `json:"status_code"`
+	GrossAmount       string `json:"gross_amount"`
+	SignatureKey      string `json:"signature_key"`
+	TransactionStatus string `json:"transaction_status"`
+	FraudStatus       string `json:"fraud_status"`
+}
+
+// ParseWebhook verifies Midtrans's body signature,
+// SHA512(order_id + status_code + gross_amount + server_key), and maps the status.
+func (a *Adapter) ParseWebhook(payload []byte, _ map[string][]string) (*ports.WebhookNotification, error) {
+	if a.cfg.ServerKey == "" {
+		// With an empty key anyone could compute a valid signature.
+		return nil, apperror.InvalidInput("midtrans server key not configured; rejecting webhook")
+	}
+
+	var n notification
 	if err := json.Unmarshal(payload, &n); err != nil {
-		return apperror.InvalidInput("invalid webhook payload")
+		return nil, apperror.InvalidInput("invalid webhook payload")
 	}
-	raw := n["order_id"] + n["status_code"] + n["gross_amount"] + a.cfg.ServerKey
-	expected := fmt.Sprintf("%x", sha512.Sum512([]byte(raw)))
-	if expected != signature {
-		return apperror.InvalidInput("webhook signature mismatch")
+
+	sum := sha512.Sum512([]byte(n.OrderID + n.StatusCode + n.GrossAmount + a.cfg.ServerKey))
+	expected := hex.EncodeToString(sum[:])
+	if subtle.ConstantTimeCompare([]byte(expected), []byte(n.SignatureKey)) != 1 {
+		return nil, apperror.InvalidInput("webhook signature mismatch")
 	}
-	return nil
+	if n.TransactionID == "" {
+		return nil, apperror.InvalidInput("webhook missing transaction_id")
+	}
+
+	return &ports.WebhookNotification{
+		PaymentID:            n.OrderID,
+		GatewayTransactionID: n.TransactionID,
+		Status:               mapTransactionStatus(n.TransactionStatus, n.FraudStatus),
+		GatewayStatus:        n.TransactionStatus,
+	}, nil
+}
+
+// mapTransactionStatus follows Midtrans's status guide: a card "capture" only counts as
+// paid once fraud review accepts it; "challenge" stays pending until the merchant decides.
+func mapTransactionStatus(status, fraudStatus string) ports.TransactionStatus {
+	switch status {
+	case "settlement":
+		return ports.TransactionSettled
+	case "capture":
+		if fraudStatus == "" || fraudStatus == "accept" {
+			return ports.TransactionSettled
+		}
+		return ports.TransactionPending
+	case "pending", "authorize":
+		return ports.TransactionPending
+	case "deny", "cancel", "expire", "failure":
+		return ports.TransactionFailed
+	default:
+		return ports.TransactionUnknown
+	}
 }
 
 func (a *Adapter) CancelTransaction(ctx context.Context, gatewayTxID string) error {
@@ -141,9 +192,13 @@ func (a *Adapter) buildChargeRequest(req ports.CreateTransactionRequest) map[str
 	return map[string]any{
 		"payment_type": "bank_transfer",
 		"transaction_details": map[string]any{
-			"order_id":     req.ReferenceID,
+			// order_id is PayGate's payment ID, so it is globally unique and webhooks map
+			// straight back to a payment. Callers' references can collide across services.
+			"order_id":     req.PaymentID,
 			"gross_amount": req.Amount,
 		},
+		// Keeps the caller's reference searchable in the Midtrans dashboard.
+		"custom_field1": req.ReferenceID,
 		"bank_transfer": map[string]any{"bank": strings.ToLower(req.BankCode)},
 		"customer_details": map[string]any{
 			"first_name": req.CustomerName,
