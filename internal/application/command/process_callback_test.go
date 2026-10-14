@@ -14,7 +14,7 @@ import (
 func pendingPayment(t *testing.T, ref, gatewayTxID string) *payment.Payment {
 	t.Helper()
 	m, _ := payment.NewMoney(150000, "IDR")
-	p, err := payment.New(ref, "order-service", m, payment.GatewayMidtrans, "VIRTUAL_ACCOUNT",
+	p, err := payment.New(ref, "order-service", m, payment.GatewayMidtrans, payment.MethodVirtualAccount,
 		payment.CustomerInfo{Name: "Alice", Email: "alice@example.com"}, "", nil, nil)
 	if err != nil {
 		t.Fatalf("payment.New: %v", err)

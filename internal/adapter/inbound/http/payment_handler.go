@@ -10,6 +10,7 @@ import (
 
 	"github.com/Trisentosa/payment-module/internal/adapter/inbound/http/middleware"
 	"github.com/Trisentosa/payment-module/internal/application/command"
+	"github.com/Trisentosa/payment-module/internal/application/ports"
 	"github.com/Trisentosa/payment-module/internal/application/query"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
 	"github.com/Trisentosa/payment-module/internal/infrastructure/logger"
@@ -86,6 +87,8 @@ func (h *PaymentHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		GatewayType:        string(req.GatewayType),
 		PaymentMethodType:  string(req.PaymentMethodType),
 		BankCode:           derefStr(req.BankCode),
+		CardToken:          derefStr(req.CardToken),
+		ReturnURL:          derefStr(req.ReturnURL),
 		CustomerName:       req.CustomerName,
 		CustomerEmail:      req.CustomerEmail,
 		CustomerPhone:      derefStr(req.CustomerPhone),
@@ -128,11 +131,56 @@ func toCreatePaymentResponse(result *command.CreatePaymentResult) CreatePaymentR
 		Currency:    result.Payment.Amount.Currency,
 		CreatedAt:   result.Payment.CreatedAt,
 	}
-	if result.PaymentInstructions != nil {
-		m := map[string]any(result.PaymentInstructions)
-		resp.PaymentInstructions = &m
+	na := toNextAction(result.NextAction)
+	resp.NextAction = &na
+	if instructions := legacyInstructions(result.NextAction); len(instructions) > 0 {
+		resp.PaymentInstructions = &instructions
 	}
 	return resp
+}
+
+func toNextAction(a ports.NextAction) NextAction {
+	t := a.Type
+	if t == "" {
+		t = ports.NextActionNone
+	}
+	return NextAction{
+		Type:        NextActionType(t),
+		VANumber:    optStr(a.VANumber),
+		Bank:        optStr(a.Bank),
+		QRString:    optStr(a.QRString),
+		QRImageURL:  optStr(a.QRImageURL),
+		RedirectURL: optStr(a.RedirectURL),
+		ExpiresAt:   a.ExpiresAt,
+	}
+}
+
+// legacyInstructions fills the deprecated payment_instructions map. VA callers read
+// va_number, bank and expiry_time from it before next_action existed.
+func legacyInstructions(a ports.NextAction) map[string]any {
+	m := map[string]any{}
+	for k, v := range map[string]string{
+		"va_number":    a.VANumber,
+		"bank":         a.Bank,
+		"qr_string":    a.QRString,
+		"qr_image_url": a.QRImageURL,
+		"redirect_url": a.RedirectURL,
+	} {
+		if v != "" {
+			m[k] = v
+		}
+	}
+	if a.ExpiresAt != nil {
+		m["expiry_time"] = a.ExpiresAt.Format(time.RFC3339)
+	}
+	return m
+}
+
+func optStr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func (h *PaymentHandler) CancelPayment(w http.ResponseWriter, r *http.Request) {

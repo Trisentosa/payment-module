@@ -115,7 +115,7 @@ func newTestPayment(referenceID string) *payment.Payment {
 	m, _ := payment.NewMoney(75000, "IDR")
 	p, _ := payment.New(
 		referenceID, "order-service",
-		m, payment.GatewayMidtrans, "BANK_TRANSFER",
+		m, payment.GatewayMidtrans, payment.MethodVirtualAccount,
 		payment.CustomerInfo{ExternalID: "u1", Name: "Bob", Email: "bob@example.com"},
 		"Integration test payment", nil, map[string]any{"source": "test"},
 	)

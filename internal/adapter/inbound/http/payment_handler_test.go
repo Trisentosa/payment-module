@@ -1,6 +1,7 @@
 package http_test
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -117,5 +118,32 @@ func TestCreatePayment_CacheOutageStillBlocksDuplicates(t *testing.T) {
 	}
 	if h.gateway.CreateCalls != 1 {
 		t.Errorf("gateway called %d times, want 1", h.gateway.CreateCalls)
+	}
+}
+
+func TestCreatePayment_ResponseCarriesNextAction(t *testing.T) {
+	h := newHarness()
+
+	rec := h.post(createBody)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status %d, body %s", rec.Code, rec.Body)
+	}
+	var resp struct {
+		NextAction struct {
+			Type     string `json:"type"`
+			VANumber string `json:"va_number"`
+			Bank     string `json:"bank"`
+		} `json:"next_action"`
+		PaymentInstructions map[string]any `json:"payment_instructions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.NextAction.Type != "DISPLAY_VA" || resp.NextAction.VANumber != "1234567890" || resp.NextAction.Bank != "bca" {
+		t.Errorf("next_action: got %+v", resp.NextAction)
+	}
+	// Older VA callers still read the deprecated map.
+	if resp.PaymentInstructions["va_number"] != "1234567890" {
+		t.Errorf("payment_instructions.va_number: got %v", resp.PaymentInstructions["va_number"])
 	}
 }

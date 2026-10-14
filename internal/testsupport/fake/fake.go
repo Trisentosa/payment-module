@@ -104,6 +104,8 @@ type Gateway struct {
 
 	Notification *ports.WebhookNotification
 	ParseErr     error
+
+	Capabilities map[payment.Method]ports.MethodCapability // nil means every method is fully supported
 }
 
 func (g *Gateway) CreateTransaction(context.Context, ports.CreateTransactionRequest) (*ports.GatewayResponse, error) {
@@ -118,9 +120,18 @@ func (g *Gateway) CreateTransaction(context.Context, ports.CreateTransactionRequ
 	}
 	return &ports.GatewayResponse{
 		GatewayTransactionID: "gw-" + uuid.NewString(),
-		PaymentInstructions:  map[string]any{"va_number": "1234567890", "bank": "bca"},
+		Status:               ports.TransactionPending,
+		NextAction:           ports.NextAction{Type: ports.NextActionDisplayVA, VANumber: "1234567890", Bank: "bca"},
 		RawResponse:          map[string]any{"status_code": "201"},
 	}, nil
+}
+
+// Capability reports Capabilities[method], or full support when the map is nil.
+func (g *Gateway) Capability(method payment.Method) ports.MethodCapability {
+	if g.Capabilities == nil {
+		return ports.MethodCapability{Charge: true, Refund: true, PartialRefund: true}
+	}
+	return g.Capabilities[method]
 }
 
 func (g *Gateway) GetTransactionStatus(context.Context, string) (string, error) { return "", nil }

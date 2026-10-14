@@ -12,7 +12,7 @@ func newTestPayment(t *testing.T) *payment.Payment {
 	m, _ := payment.NewMoney(50000, "IDR")
 	p, err := payment.New(
 		"REF-001", "order-service",
-		m, payment.GatewayMidtrans, "BANK_TRANSFER",
+		m, payment.GatewayMidtrans, payment.MethodVirtualAccount,
 		payment.CustomerInfo{ExternalID: "u1", Name: "Alice", Email: "alice@example.com"},
 		"Test payment", nil, nil,
 	)
@@ -118,5 +118,32 @@ func TestStatus_IsTerminal(t *testing.T) {
 		if s.IsTerminal() {
 			t.Errorf("%s should not be terminal", s)
 		}
+	}
+}
+
+func TestParseMethod(t *testing.T) {
+	for in, want := range map[string]payment.Method{
+		"VIRTUAL_ACCOUNT": payment.MethodVirtualAccount,
+		"qris":            payment.MethodQRIS,
+		" GoPay ":         payment.MethodGoPay,
+		"SHOPEEPAY":       payment.MethodShopeePay,
+		"CARD":            payment.MethodCard,
+	} {
+		got, err := payment.ParseMethod(in)
+		if err != nil || got != want {
+			t.Errorf("ParseMethod(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	if _, err := payment.ParseMethod("BANK_TRANSFER"); !apperror.IsCode(err, apperror.CodeInvalidInput) {
+		t.Errorf("unknown method: expected INVALID_INPUT, got %v", err)
+	}
+}
+
+func TestNew_RejectsUnknownMethod(t *testing.T) {
+	m, _ := payment.NewMoney(50000, "IDR")
+	_, err := payment.New("REF-002", "order-service", m, payment.GatewayMidtrans, payment.Method("BANK_TRANSFER"),
+		payment.CustomerInfo{}, "", nil, nil)
+	if !apperror.IsCode(err, apperror.CodeInvalidInput) {
+		t.Fatalf("expected INVALID_INPUT, got %v", err)
 	}
 }

@@ -5,7 +5,70 @@ package http
 
 import (
 	"time"
+
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
+
+const (
+	AdminKeyScopes adminKeyContextKey = "AdminKey.Scopes"
+)
+
+// Defines values for AdminForceExpireResponseStatus.
+const (
+	AdminForceExpireResponseStatusEXPIRED AdminForceExpireResponseStatus = "EXPIRED"
+)
+
+// Valid indicates whether the value is a known member of the AdminForceExpireResponseStatus enum.
+func (e AdminForceExpireResponseStatus) Valid() bool {
+	switch e {
+	case AdminForceExpireResponseStatusEXPIRED:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminPaymentStatus.
+const (
+	AdminPaymentStatusCANCELLED       AdminPaymentStatus = "CANCELLED"
+	AdminPaymentStatusCOMPLETED       AdminPaymentStatus = "COMPLETED"
+	AdminPaymentStatusEXPIRED         AdminPaymentStatus = "EXPIRED"
+	AdminPaymentStatusFAILED          AdminPaymentStatus = "FAILED"
+	AdminPaymentStatusINITIATED       AdminPaymentStatus = "INITIATED"
+	AdminPaymentStatusPENDING         AdminPaymentStatus = "PENDING"
+	AdminPaymentStatusPROCESSING      AdminPaymentStatus = "PROCESSING"
+	AdminPaymentStatusREFUNDED        AdminPaymentStatus = "REFUNDED"
+	AdminPaymentStatusREFUNDFAILED    AdminPaymentStatus = "REFUND_FAILED"
+	AdminPaymentStatusREFUNDREQUESTED AdminPaymentStatus = "REFUND_REQUESTED"
+)
+
+// Valid indicates whether the value is a known member of the AdminPaymentStatus enum.
+func (e AdminPaymentStatus) Valid() bool {
+	switch e {
+	case AdminPaymentStatusCANCELLED:
+		return true
+	case AdminPaymentStatusCOMPLETED:
+		return true
+	case AdminPaymentStatusEXPIRED:
+		return true
+	case AdminPaymentStatusFAILED:
+		return true
+	case AdminPaymentStatusINITIATED:
+		return true
+	case AdminPaymentStatusPENDING:
+		return true
+	case AdminPaymentStatusPROCESSING:
+		return true
+	case AdminPaymentStatusREFUNDED:
+		return true
+	case AdminPaymentStatusREFUNDFAILED:
+		return true
+	case AdminPaymentStatusREFUNDREQUESTED:
+		return true
+	default:
+		return false
+	}
+}
 
 // Defines values for CancelPaymentResponseStatus.
 const (
@@ -39,14 +102,23 @@ func (e CreatePaymentRequestGatewayType) Valid() bool {
 
 // Defines values for CreatePaymentRequestPaymentMethodType.
 const (
+	CARD           CreatePaymentRequestPaymentMethodType = "CARD"
+	GOPAY          CreatePaymentRequestPaymentMethodType = "GOPAY"
 	QRIS           CreatePaymentRequestPaymentMethodType = "QRIS"
+	SHOPEEPAY      CreatePaymentRequestPaymentMethodType = "SHOPEEPAY"
 	VIRTUALACCOUNT CreatePaymentRequestPaymentMethodType = "VIRTUAL_ACCOUNT"
 )
 
 // Valid indicates whether the value is a known member of the CreatePaymentRequestPaymentMethodType enum.
 func (e CreatePaymentRequestPaymentMethodType) Valid() bool {
 	switch e {
+	case CARD:
+		return true
+	case GOPAY:
+		return true
 	case QRIS:
+		return true
+	case SHOPEEPAY:
 		return true
 	case VIRTUALACCOUNT:
 		return true
@@ -130,6 +202,133 @@ func (e ErrorResponseCode) Valid() bool {
 	}
 }
 
+// Defines values for NextActionType.
+const (
+	DISPLAYQR NextActionType = "DISPLAY_QR"
+	DISPLAYVA NextActionType = "DISPLAY_VA"
+	NONE      NextActionType = "NONE"
+	REDIRECT  NextActionType = "REDIRECT"
+)
+
+// Valid indicates whether the value is a known member of the NextActionType enum.
+func (e NextActionType) Valid() bool {
+	switch e {
+	case DISPLAYQR:
+		return true
+	case DISPLAYVA:
+		return true
+	case NONE:
+		return true
+	case REDIRECT:
+		return true
+	default:
+		return false
+	}
+}
+
+// AdminAttempt Single gateway attempt record
+type AdminAttempt struct {
+	AttemptNumber        int32              `json:"attempt_number"`
+	CreatedAt            time.Time          `json:"created_at"`
+	DurationMs           *int64             `json:"duration_ms,omitempty"`
+	ErrorCode            *string            `json:"error_code,omitempty"`
+	GatewayTransactionID *string            `json:"gateway_transaction_id,omitempty"`
+	ID                   openapi_types.UUID `json:"id"`
+	Status               string             `json:"status"`
+}
+
+// AdminAttemptsResponse defines model for AdminAttemptsResponse.
+type AdminAttemptsResponse struct {
+	Data []AdminAttempt `json:"data"`
+}
+
+// AdminEvent Domain event record from the payment event log
+type AdminEvent struct {
+	CreatedAt      time.Time          `json:"created_at"`
+	EventType      string             `json:"event_type"`
+	ID             openapi_types.UUID `json:"id"`
+	Payload        map[string]any     `json:"payload"`
+	SequenceNumber int32              `json:"sequence_number"`
+}
+
+// AdminEventsResponse defines model for AdminEventsResponse.
+type AdminEventsResponse struct {
+	Data []AdminEvent `json:"data"`
+}
+
+// AdminForceExpireResponse defines model for AdminForceExpireResponse.
+type AdminForceExpireResponse struct {
+	PaymentID openapi_types.UUID             `json:"payment_id"`
+	Status    AdminForceExpireResponseStatus `json:"status"`
+}
+
+// AdminForceExpireResponseStatus defines model for AdminForceExpireResponse.Status.
+type AdminForceExpireResponseStatus string
+
+// AdminListPaymentsResponse defines model for AdminListPaymentsResponse.
+type AdminListPaymentsResponse struct {
+	Data []AdminPayment `json:"data"`
+	Meta struct {
+		Count      int        `json:"count"`
+		HasMore    bool       `json:"has_more"`
+		NextCursor *time.Time `json:"next_cursor,omitempty"`
+	} `json:"meta"`
+}
+
+// AdminOutboxStatsResponse defines model for AdminOutboxStatsResponse.
+type AdminOutboxStatsResponse struct {
+	Failed                  int `json:"failed"`
+	OldestPendingAgeSeconds int `json:"oldest_pending_age_seconds"`
+	Pending                 int `json:"pending"`
+	Published               int `json:"published"`
+}
+
+// AdminPayment Payment summary returned by admin list and detail endpoints
+type AdminPayment struct {
+	Amount               int64              `json:"amount"`
+	CallerService        string             `json:"caller_service"`
+	CreatedAt            time.Time          `json:"created_at"`
+	Currency             string             `json:"currency"`
+	Customer             map[string]any     `json:"customer"`
+	Description          *string            `json:"description,omitempty"`
+	ExpiredAt            *time.Time         `json:"expired_at,omitempty"`
+	Gateway              string             `json:"gateway"`
+	GatewayTransactionID *string            `json:"gateway_transaction_id,omitempty"`
+	ID                   openapi_types.UUID `json:"id"`
+	Metadata             *map[string]any    `json:"metadata,omitempty"`
+	PaidAt               *time.Time         `json:"paid_at,omitempty"`
+	PaymentMethodType    string             `json:"payment_method_type"`
+	ReferenceID          string             `json:"reference_id"`
+	Status               AdminPaymentStatus `json:"status"`
+	UpdatedAt            time.Time          `json:"updated_at"`
+}
+
+// AdminPaymentStatus defines model for AdminPayment.Status.
+type AdminPaymentStatus string
+
+// AdminPaymentDetailResponse defines model for AdminPaymentDetailResponse.
+type AdminPaymentDetailResponse struct {
+	Attempts  []AdminAttempt     `json:"attempts"`
+	Events    []AdminEvent       `json:"events"`
+	PaymentID openapi_types.UUID `json:"payment_id"`
+}
+
+// AdminRefund defines model for AdminRefund.
+type AdminRefund struct {
+	Amount          int64              `json:"amount"`
+	CreatedAt       time.Time          `json:"created_at"`
+	GatewayRefundID *string            `json:"gateway_refund_id,omitempty"`
+	ID              openapi_types.UUID `json:"id"`
+	Reason          *string            `json:"reason,omitempty"`
+	ReferenceID     string             `json:"reference_id"`
+	Status          string             `json:"status"`
+}
+
+// AdminRefundsResponse defines model for AdminRefundsResponse.
+type AdminRefundsResponse struct {
+	Data []AdminRefund `json:"data"`
+}
+
 // CancelPaymentResponse defines model for CancelPaymentResponse.
 type CancelPaymentResponse struct {
 	PaymentID string                      `json:"payment_id"`
@@ -144,8 +343,12 @@ type CreatePaymentRequest struct {
 	// Amount Amount in the smallest currency unit (e.g. IDR uses no sub-unit, so 15000 = Rp 15.000)
 	Amount int64 `json:"amount"`
 
-	// BankCode Required when payment_method_type is VIRTUAL_ACCOUNT (e.g. BCA, BNI, BRI)
+	// BankCode Required for VIRTUAL_ACCOUNT. Midtrans supports BCA, BNI, BRI, PERMATA and CIMB.
 	BankCode *string `json:"bank_code,omitempty"`
+
+	// CardToken Required for CARD. One-time token from the gateway's client-side tokenizer
+	// (Midtrans: `MidtransNew3ds.getCardToken`). Never send raw card data to PayGate.
+	CardToken *string `json:"card_token,omitempty"`
 
 	// Currency ISO 4217 currency code
 	Currency      string `json:"currency"`
@@ -166,17 +369,23 @@ type CreatePaymentRequest struct {
 	// Metadata Arbitrary caller-defined key-value pairs passed through to the gateway
 	Metadata *map[string]any `json:"metadata,omitempty"`
 
-	// PaymentMethodType Broad payment method category
+	// PaymentMethodType How the customer pays. The gateway must support the method, otherwise the request
+	// fails with 400. VIRTUAL_ACCOUNT payments can't be refunded through the gateway.
 	PaymentMethodType CreatePaymentRequestPaymentMethodType `json:"payment_method_type"`
 
 	// ReferenceID Caller-assigned stable identifier for this payment (used as idempotency seed)
 	ReferenceID string `json:"reference_id"`
+
+	// ReturnURL Where the customer is sent back after paying in the e-wallet app.
+	// Required for SHOPEEPAY, optional for GOPAY. Can be an https URL or an app deeplink.
+	ReturnURL *string `json:"return_url,omitempty"`
 }
 
 // CreatePaymentRequestGatewayType Payment gateway to route through
 type CreatePaymentRequestGatewayType string
 
-// CreatePaymentRequestPaymentMethodType Broad payment method category
+// CreatePaymentRequestPaymentMethodType How the customer pays. The gateway must support the method, otherwise the request
+// fails with 400. VIRTUAL_ACCOUNT payments can't be refunded through the gateway.
 type CreatePaymentRequestPaymentMethodType string
 
 // CreatePaymentResponse defines model for CreatePaymentResponse.
@@ -185,10 +394,16 @@ type CreatePaymentResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 	Currency  string    `json:"currency"`
 
+	// NextAction What the customer must do to finish paying. Read `type` first; it says which other
+	// fields are set. For REDIRECT, `qr_image_url` may also be set so desktop customers can
+	// scan instead of opening a mobile app.
+	NextAction *NextAction `json:"next_action,omitempty"`
+
 	// PaymentID PayGate-assigned payment identifier
 	PaymentID string `json:"payment_id"`
 
-	// PaymentInstructions Gateway-specific fulfilment instructions (e.g. virtual account number, QR code URL)
+	// PaymentInstructions Deprecated; use next_action. Flat copy of next_action's fields, kept for older callers.
+	// Deprecated: this property has been marked as deprecated upstream, but no `x-deprecated-reason` was set
 	PaymentInstructions *map[string]any `json:"payment_instructions,omitempty"`
 
 	// ReferenceID Echo of the caller-supplied reference_id
@@ -209,6 +424,37 @@ type ErrorResponse struct {
 // ErrorResponseCode defines model for ErrorResponse.Code.
 type ErrorResponseCode string
 
+// NextAction What the customer must do to finish paying. Read `type` first; it says which other
+// fields are set. For REDIRECT, `qr_image_url` may also be set so desktop customers can
+// scan instead of opening a mobile app.
+type NextAction struct {
+	Bank *string `json:"bank,omitempty"`
+
+	// ExpiresAt When the customer can no longer complete this action
+	ExpiresAt  *time.Time `json:"expires_at,omitempty"`
+	QRImageURL *string    `json:"qr_image_url,omitempty"`
+
+	// QRString Raw QRIS payload, for rendering the QR yourself
+	QRString    *string `json:"qr_string,omitempty"`
+	RedirectURL *string `json:"redirect_url,omitempty"`
+
+	// Type DISPLAY_VA: show va_number and bank for a bank transfer.
+	// DISPLAY_QR: show the QR (qr_string or qr_image_url).
+	// REDIRECT: send the customer to redirect_url (e-wallet app deeplink or card 3DS page).
+	// NONE: nothing to do; the payment already finished (see status).
+	Type     NextActionType `json:"type"`
+	VANumber *string        `json:"va_number,omitempty"`
+}
+
+// NextActionType DISPLAY_VA: show va_number and bank for a bank transfer.
+// DISPLAY_QR: show the QR (qr_string or qr_image_url).
+// REDIRECT: send the customer to redirect_url (e-wallet app deeplink or card 3DS page).
+// NONE: nothing to do; the payment already finished (see status).
+type NextActionType string
+
+// AdminPaymentID defines model for AdminPaymentID.
+type AdminPaymentID = openapi_types.UUID
+
 // XServiceName defines model for XServiceName.
 type XServiceName = string
 
@@ -228,9 +474,32 @@ type InternalError = ErrorResponse
 // constant that maps to `apperror.Code` on the server.
 type NotFound = ErrorResponse
 
+// Unauthorized All error responses share this shape. The `code` field is a machine-readable
+// constant that maps to `apperror.Code` on the server.
+type Unauthorized = ErrorResponse
+
 // UnprocessableEntity All error responses share this shape. The `code` field is a machine-readable
 // constant that maps to `apperror.Code` on the server.
 type UnprocessableEntity = ErrorResponse
+
+// adminKeyContextKey is the context key for AdminKey security scheme
+type adminKeyContextKey string
+
+// AdminListPaymentsParams defines parameters for AdminListPayments.
+type AdminListPaymentsParams struct {
+	Status        *string `form:"status,omitempty" json:"status,omitempty"`
+	CallerService *string `form:"caller_service,omitempty" json:"caller_service,omitempty"`
+	GatewayType   *string `form:"gateway_type,omitempty" json:"gateway_type,omitempty"`
+
+	// ReferenceId Prefix match on reference_id
+	ReferenceId *string    `form:"reference_id,omitempty" json:"reference_id,omitempty"`
+	From        *time.Time `form:"from,omitempty" json:"from,omitempty"`
+	To          *time.Time `form:"to,omitempty" json:"to,omitempty"`
+
+	// Cursor Opaque cursor (created_at of last row in previous page)
+	Cursor *time.Time `form:"cursor,omitempty" json:"cursor,omitempty"`
+	Limit  *int       `form:"limit,omitempty" json:"limit,omitempty"`
+}
 
 // CreatePaymentParams defines parameters for CreatePayment.
 type CreatePaymentParams struct {

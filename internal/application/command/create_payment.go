@@ -19,6 +19,8 @@ type CreatePaymentCommand struct {
 	GatewayType        string
 	PaymentMethodType  string
 	BankCode           string
+	CardToken          string
+	ReturnURL          string
 	CustomerName       string
 	CustomerEmail      string
 	CustomerPhone      string
@@ -29,8 +31,8 @@ type CreatePaymentCommand struct {
 }
 
 type CreatePaymentResult struct {
-	Payment             *payment.Payment
-	PaymentInstructions map[string]any
+	Payment    *payment.Payment
+	NextAction ports.NextAction
 }
 
 type CreatePaymentHandler struct {
@@ -51,12 +53,17 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 		return nil, apperror.InvalidInput(err.Error())
 	}
 
+	method, err := payment.ParseMethod(cmd.PaymentMethodType)
+	if err != nil {
+		return nil, err
+	}
+
 	p, err := payment.New(
 		cmd.ReferenceID,
 		cmd.CallerService,
 		money,
 		payment.GatewayType(cmd.GatewayType),
-		cmd.PaymentMethodType,
+		method,
 		payment.CustomerInfo{
 			ExternalID: cmd.CustomerExternalID,
 			Name:       cmd.CustomerName,
@@ -86,6 +93,9 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 	if err != nil {
 		return nil, apperror.InvalidInput("unsupported gateway: " + cmd.GatewayType)
 	}
+	if !gw.Capability(method).Charge {
+		return nil, apperror.InvalidInput(fmt.Sprintf("%s does not support payment_method_type %s", cmd.GatewayType, method))
+	}
 
 	log.Info("calling gateway", "gateway", cmd.GatewayType, "payment_id", p.ID)
 
@@ -94,8 +104,10 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 		ReferenceID:       cmd.ReferenceID,
 		Amount:            cmd.Amount,
 		Currency:          cmd.Currency,
-		PaymentMethodType: cmd.PaymentMethodType,
+		PaymentMethod:     method,
 		BankCode:          cmd.BankCode,
+		CardToken:         cmd.CardToken,
+		ReturnURL:         cmd.ReturnURL,
 		CustomerName:      cmd.CustomerName,
 		CustomerEmail:     cmd.CustomerEmail,
 		CustomerPhone:     cmd.CustomerPhone,
@@ -103,6 +115,11 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 		ExpiredAt:         cmd.ExpiredAt,
 		Metadata:          cmd.Metadata,
 	})
+	if apperror.IsCode(err, apperror.CodeInvalidInput) {
+		// The gateway refused the request's contents before creating anything. Nothing is
+		// stored, so the caller can fix the request and retry with the same reference.
+		return nil, err
+	}
 	if err != nil {
 		p.MarkFailed("GATEWAY_ERROR", err.Error())
 		if saveErr := h.repo.Save(ctx, p); saveErr != nil {
@@ -115,6 +132,16 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 		return nil, err
 	}
 
+	// Some charges finish at once, e.g. a card captured without 3DS, or one declined outright.
+	switch gwResp.Status {
+	case ports.TransactionSettled:
+		if err = p.MarkCompleted(time.Now().UTC()); err != nil {
+			return nil, err
+		}
+	case ports.TransactionFailed:
+		p.MarkFailed("DECLINED", "declined by gateway at charge time")
+	}
+
 	if err = h.repo.Save(ctx, p); err != nil {
 		return nil, err
 	}
@@ -122,7 +149,7 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 	log.Info("payment created", "payment_id", p.ID, "status", p.Status)
 
 	return &CreatePaymentResult{
-		Payment:             p,
-		PaymentInstructions: gwResp.PaymentInstructions,
+		Payment:    p,
+		NextAction: gwResp.NextAction,
 	}, nil
 }

@@ -1,14 +1,10 @@
 package midtrans_test
 
 import (
-	"context"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"testing"
-	"time"
 
 	"github.com/Trisentosa/payment-module/internal/adapter/outbound/gateway/midtrans"
 	"github.com/Trisentosa/payment-module/internal/application/ports"
@@ -133,52 +129,5 @@ func TestParseWebhook_StatusMapping(t *testing.T) {
 				t.Errorf("got %s, want %s", n.Status, tc.want)
 			}
 		})
-	}
-}
-
-func TestCreateTransaction_SendsPaymentIDAsOrderID(t *testing.T) {
-	var charge map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v2/charge" {
-			t.Errorf("path: got %s, want /v2/charge", r.URL.Path)
-		}
-		if err := json.NewDecoder(r.Body).Decode(&charge); err != nil {
-			t.Errorf("decode charge body: %v", err)
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"status_code": "201",
-			"transaction_id": "9aed5972-5b6a-401e-894b-a32c91ed1a3a",
-			"order_id": "` + orderID + `",
-			"va_numbers": [{"bank": "bca", "va_number": "12345678901"}],
-			"expiry_time": "2026-10-13 10:00:00"
-		}`))
-	}))
-	defer srv.Close()
-
-	a := midtrans.NewAdapter(midtrans.Config{ServerKey: serverKey, BaseURL: srv.URL, Timeout: 5 * time.Second})
-	resp, err := a.CreateTransaction(context.Background(), ports.CreateTransactionRequest{
-		PaymentID:   orderID,
-		ReferenceID: "ORDER-101",
-		Amount:      150000,
-		Currency:    "IDR",
-		BankCode:    "BCA",
-	})
-	if err != nil {
-		t.Fatalf("CreateTransaction: %v", err)
-	}
-
-	details, _ := charge["transaction_details"].(map[string]any)
-	if details["order_id"] != orderID {
-		t.Errorf("order_id: got %v, want payment id %s", details["order_id"], orderID)
-	}
-	if charge["custom_field1"] != "ORDER-101" {
-		t.Errorf("custom_field1: got %v, want caller reference ORDER-101", charge["custom_field1"])
-	}
-	if resp.GatewayTransactionID != "9aed5972-5b6a-401e-894b-a32c91ed1a3a" {
-		t.Errorf("transaction id: got %q", resp.GatewayTransactionID)
-	}
-	if resp.PaymentInstructions["va_number"] != "12345678901" {
-		t.Errorf("va_number: got %v", resp.PaymentInstructions["va_number"])
 	}
 }

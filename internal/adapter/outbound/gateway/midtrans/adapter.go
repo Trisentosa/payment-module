@@ -9,11 +9,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Trisentosa/payment-module/internal/application/ports"
-	"github.com/Trisentosa/payment-module/internal/infrastructure/logger"
 	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
 )
 
@@ -33,29 +33,6 @@ func NewAdapter(cfg Config) *Adapter {
 		cfg:    cfg,
 		client: &http.Client{Timeout: cfg.Timeout},
 	}
-}
-
-func (a *Adapter) CreateTransaction(ctx context.Context, req ports.CreateTransactionRequest) (*ports.GatewayResponse, error) {
-	log := logger.FromContext(ctx)
-
-	body := a.buildChargeRequest(req)
-	respBody, err := a.post(ctx, "/v2/charge", body)
-	if err != nil {
-		return nil, apperror.GatewayError("midtrans charge failed", err)
-	}
-
-	txID, ok := respBody["transaction_id"].(string)
-	if !ok {
-		return nil, apperror.GatewayError("missing transaction_id in midtrans response", nil)
-	}
-
-	log.Info("midtrans transaction created", "gateway_tx_id", txID, "payment_id", req.PaymentID)
-
-	return &ports.GatewayResponse{
-		GatewayTransactionID: txID,
-		PaymentInstructions:  extractInstructions(respBody),
-		RawResponse:          respBody,
-	}, nil
 }
 
 // notification holds the HTTP notification fields PayGate reads. Midtrans sends many more
@@ -121,9 +98,12 @@ func mapTransactionStatus(status, fraudStatus string) ports.TransactionStatus {
 }
 
 func (a *Adapter) CancelTransaction(ctx context.Context, gatewayTxID string) error {
-	_, err := a.post(ctx, fmt.Sprintf("/v2/%s/cancel", gatewayTxID), nil)
+	res, err := a.do(ctx, fmt.Sprintf("/v2/%s/cancel", gatewayTxID), nil)
 	if err != nil {
 		return apperror.GatewayError("midtrans cancel failed", err)
+	}
+	if res.failed() {
+		return apperror.GatewayError(fmt.Sprintf("midtrans cancel failed: %s %s", res.code, res.message()), nil)
 	}
 	return nil
 }
@@ -139,35 +119,61 @@ func (a *Adapter) GetTransactionStatus(ctx context.Context, gatewayTxID string) 
 
 func (a *Adapter) CreateRefund(ctx context.Context, gatewayTxID string, amount int64, reason string) (string, error) {
 	body := map[string]any{"amount": amount, "reason": reason}
-	resp, err := a.post(ctx, fmt.Sprintf("/v2/%s/refund", gatewayTxID), body)
+	res, err := a.do(ctx, fmt.Sprintf("/v2/%s/refund", gatewayTxID), body)
 	if err != nil {
 		return "", apperror.GatewayError("midtrans refund failed", err)
 	}
-	refundID, _ := resp["refund_chargeback_id"].(string)
-	return refundID, nil
+	if res.failed() {
+		return "", apperror.GatewayError(fmt.Sprintf("midtrans refund failed: %s %s", res.code, res.message()), nil)
+	}
+	return fmt.Sprint(res.body["refund_chargeback_id"]), nil
 }
 
-func (a *Adapter) post(ctx context.Context, path string, body map[string]any) (map[string]any, error) {
-	b, _ := json.Marshal(body)
+// response is a decoded Midtrans reply. Midtrans often answers HTTP 200 and reports the
+// outcome in the body's status_code, so callers check both.
+type response struct {
+	httpStatus int
+	code       string // body status_code, e.g. "201" pending, "200" success, "202" denied
+	body       map[string]any
+}
+
+func (r response) message() string {
+	msg, _ := r.body["status_message"].(string)
+	return msg
+}
+
+// failed reports a 4xx/5xx in either the HTTP status or the body's status_code.
+func (r response) failed() bool {
+	return r.httpStatus >= 400 || strings.HasPrefix(r.code, "4") || strings.HasPrefix(r.code, "5")
+}
+
+// do POSTs to Midtrans. An error means no usable reply arrived, so the outcome is unknown.
+func (a *Adapter) do(ctx context.Context, path string, body map[string]any) (response, error) {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return response{}, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.BaseURL+path, bytes.NewReader(b))
 	if err != nil {
-		return nil, err
+		return response{}, err
 	}
 	req.SetBasicAuth(a.cfg.ServerKey, "")
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
 
 	res, err := a.client.Do(req)
 	if err != nil {
-		return nil, err
+		return response{}, err
 	}
 	defer func() { _ = res.Body.Close() }()
 
-	var out map[string]any
-	if err = json.NewDecoder(res.Body).Decode(&out); err != nil {
-		return nil, err
+	out := response{httpStatus: res.StatusCode}
+	if err = json.NewDecoder(res.Body).Decode(&out.body); err != nil {
+		return response{}, fmt.Errorf("decode midtrans HTTP %d response: %w", res.StatusCode, err)
 	}
-	if res.StatusCode >= 400 {
-		return nil, fmt.Errorf("midtrans HTTP %d: %v", res.StatusCode, out)
+	out.code, _ = out.body["status_code"].(string)
+	if out.code == "" {
+		out.code = strconv.Itoa(res.StatusCode)
 	}
 	return out, nil
 }
@@ -186,36 +192,4 @@ func (a *Adapter) get(ctx context.Context, path string) (map[string]any, error) 
 	var out map[string]any
 	_ = json.NewDecoder(res.Body).Decode(&out)
 	return out, nil
-}
-
-func (a *Adapter) buildChargeRequest(req ports.CreateTransactionRequest) map[string]any {
-	return map[string]any{
-		"payment_type": "bank_transfer",
-		"transaction_details": map[string]any{
-			// order_id is PayGate's payment ID, so it is globally unique and webhooks map
-			// straight back to a payment. Callers' references can collide across services.
-			"order_id":     req.PaymentID,
-			"gross_amount": req.Amount,
-		},
-		// Keeps the caller's reference searchable in the Midtrans dashboard.
-		"custom_field1": req.ReferenceID,
-		"bank_transfer": map[string]any{"bank": strings.ToLower(req.BankCode)},
-		"customer_details": map[string]any{
-			"first_name": req.CustomerName,
-			"email":      req.CustomerEmail,
-			"phone":      req.CustomerPhone,
-		},
-	}
-}
-
-func extractInstructions(resp map[string]any) map[string]any {
-	instr := map[string]any{}
-	if vaNumbers, ok := resp["va_numbers"].([]any); ok && len(vaNumbers) > 0 {
-		if va, ok := vaNumbers[0].(map[string]any); ok {
-			instr["va_number"] = va["va_number"]
-			instr["bank"] = va["bank"]
-		}
-	}
-	instr["expiry_time"] = resp["expiry_time"]
-	return instr
 }
