@@ -179,7 +179,7 @@ func (q *Queries) GetPaymentByReference(ctx context.Context, arg GetPaymentByRef
 	return i, err
 }
 
-const insertPayment = `-- name: InsertPayment :exec
+const insertPayment = `-- name: InsertPayment :execrows
 INSERT INTO payments (
     id, reference_id, caller_service, gateway_type, gateway_transaction_id,
     status, amount, currency, payment_method_type,
@@ -211,8 +211,8 @@ type InsertPaymentParams struct {
 	UpdatedAt              pgtype.Timestamptz
 }
 
-func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) error {
-	_, err := q.db.Exec(ctx, insertPayment,
+func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertPayment,
 		arg.ID,
 		arg.ReferenceID,
 		arg.CallerService,
@@ -232,7 +232,10 @@ func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) er
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updatePaymentFull = `-- name: UpdatePaymentFull :exec

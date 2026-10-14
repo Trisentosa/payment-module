@@ -580,13 +580,28 @@ components:
         payment_method_type:
           type: string
           x-go-name: PaymentMethodType
-          enum: [VIRTUAL_ACCOUNT, QRIS]
-          description: Broad payment method category
+          enum: [VIRTUAL_ACCOUNT, QRIS, GOPAY, SHOPEEPAY, CARD]
+          description: |
+            How the customer pays. The gateway must support the method, otherwise the request
+            fails with 400. VIRTUAL_ACCOUNT payments can't be refunded through the gateway.
         bank_code:
           type: string
           x-go-name: BankCode
-          description: Required when payment_method_type is VIRTUAL_ACCOUNT (e.g. BCA, BNI, BRI)
+          description: Required for VIRTUAL_ACCOUNT. Midtrans supports BCA, BNI, BRI, PERMATA and CIMB.
           example: BCA
+        card_token:
+          type: string
+          x-go-name: CardToken
+          description: |
+            Required for CARD. One-time token from the gateway's client-side tokenizer
+            (Midtrans: `MidtransNew3ds.getCardToken`). Never send raw card data to PayGate.
+        return_url:
+          type: string
+          x-go-name: ReturnURL
+          description: |
+            Where the customer is sent back after paying in the e-wallet app.
+            Required for SHOPEEPAY, optional for GOPAY. Can be an https URL or an app deeplink.
+          example: "https://shop.example.com/orders/9f3a1b"
         customer_name:
           type: string
           x-go-name: CustomerName
@@ -661,16 +676,56 @@ components:
           format: int64
         currency:
           type: string
+        next_action:
+          $ref: "#/components/schemas/NextAction"
         payment_instructions:
           type: object
           x-go-name: PaymentInstructions
           x-go-type: "map[string]any"
           additionalProperties: true
-          description: Gateway-specific fulfilment instructions (e.g. virtual account number, QR code URL)
+          deprecated: true
+          description: Deprecated; use next_action. Flat copy of next_action's fields, kept for older callers.
         created_at:
           type: string
           x-go-name: CreatedAt
           format: date-time
+
+    NextAction:
+      type: object
+      description: |
+        What the customer must do to finish paying. Read `type` first; it says which other
+        fields are set. For REDIRECT, `qr_image_url` may also be set so desktop customers can
+        scan instead of opening a mobile app.
+      required: [type]
+      properties:
+        type:
+          type: string
+          enum: [DISPLAY_VA, DISPLAY_QR, REDIRECT, NONE]
+          description: |
+            DISPLAY_VA: show va_number and bank for a bank transfer.
+            DISPLAY_QR: show the QR (qr_string or qr_image_url).
+            REDIRECT: send the customer to redirect_url (e-wallet app deeplink or card 3DS page).
+            NONE: nothing to do; the payment already finished (see status).
+        va_number:
+          type: string
+          x-go-name: VANumber
+        bank:
+          type: string
+        qr_string:
+          type: string
+          x-go-name: QRString
+          description: Raw QRIS payload, for rendering the QR yourself
+        qr_image_url:
+          type: string
+          x-go-name: QRImageURL
+        redirect_url:
+          type: string
+          x-go-name: RedirectURL
+        expires_at:
+          type: string
+          format: date-time
+          x-go-name: ExpiresAt
+          description: When the customer can no longer complete this action
 
     CancelPaymentResponse:
       type: object

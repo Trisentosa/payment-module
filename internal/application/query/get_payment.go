@@ -83,7 +83,7 @@ func toDTO(p *payment.Payment) *PaymentDTO {
 		GatewayTransactionID: p.GatewayTransactionID,
 		Amount:               p.Amount.Amount,
 		Currency:             p.Amount.Currency,
-		PaymentMethodType:    p.PaymentMethodType,
+		PaymentMethodType:    string(p.PaymentMethodType),
 		CustomerInfo:         customerMap,
 		Metadata:             p.Metadata,
 		Description:          p.Description,

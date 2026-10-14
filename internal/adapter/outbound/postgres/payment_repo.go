@@ -50,7 +50,8 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 	qtx := r.q.WithTx(tx)
 
 	if isNew {
-		err = qtx.InsertPayment(ctx, db.InsertPaymentParams{
+		var inserted int64
+		inserted, err = qtx.InsertPayment(ctx, db.InsertPaymentParams{
 			ID:                     p.ID,
 			ReferenceID:            p.ReferenceID,
 			CallerService:          p.CallerService,
@@ -59,7 +60,7 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 			Status:                 string(p.Status),
 			Amount:                 p.Amount.Amount,
 			Currency:               p.Amount.Currency,
-			PaymentMethodType:      toNullableString(p.PaymentMethodType),
+			PaymentMethodType:      toNullableString(string(p.PaymentMethodType)),
 			CustomerInfo:           customerInfoJSON,
 			Metadata:               metadataJSON,
 			GatewayRequestPayload:  nil,
@@ -70,6 +71,12 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 			CreatedAt:              pgtype.Timestamptz{Time: p.CreatedAt, Valid: true},
 			UpdatedAt:              pgtype.Timestamptz{Time: p.UpdatedAt, Valid: true},
 		})
+		// ON CONFLICT DO NOTHING inserts zero rows for a duplicate (reference_id, caller_service).
+		// Fail here so no events or outbox rows are written for a payment that was never stored.
+		if err == nil && inserted == 0 {
+			err = apperror.AlreadyExists("payment already exists for reference_id: " + p.ReferenceID)
+			return err
+		}
 	} else {
 		err = qtx.UpdatePaymentFull(ctx, db.UpdatePaymentFullParams{
 			ID:                     p.ID,
@@ -184,7 +191,7 @@ func toDomain(row db.Payment) (*payment.Payment, error) {
 		GatewayTransactionID: derefString(row.GatewayTransactionID),
 		Status:               payment.Status(row.Status),
 		Amount:               payment.Money{Amount: row.Amount, Currency: row.Currency},
-		PaymentMethodType:    derefString(row.PaymentMethodType),
+		PaymentMethodType:    payment.Method(derefString(row.PaymentMethodType)),
 		Description:          row.Description.String,
 		ExpiredAt:            row.ExpiredAt,
 		PaidAt:               row.PaidAt,

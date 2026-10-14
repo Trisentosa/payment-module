@@ -115,7 +115,7 @@ func newTestPayment(referenceID string) *payment.Payment {
 	m, _ := payment.NewMoney(75000, "IDR")
 	p, _ := payment.New(
 		referenceID, "order-service",
-		m, payment.GatewayMidtrans, "BANK_TRANSFER",
+		m, payment.GatewayMidtrans, payment.MethodVirtualAccount,
 		payment.CustomerInfo{ExternalID: "u1", Name: "Bob", Email: "bob@example.com"},
 		"Integration test payment", nil, map[string]any{"source": "test"},
 	)
@@ -216,7 +216,7 @@ func TestPaymentRepo_UpdateStatus(t *testing.T) {
 	}
 }
 
-func TestPaymentRepo_Save_Idempotent(t *testing.T) {
+func TestPaymentRepo_Save_DuplicateReference(t *testing.T) {
 	pool := setupTestDB(t)
 	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
 	ctx := context.Background()
@@ -228,8 +228,20 @@ func TestPaymentRepo_Save_Idempotent(t *testing.T) {
 	}
 
 	p2 := newTestPayment(refID)
-	// second save with same (reference_id, caller_service) — must not error
-	if err := repo.Save(ctx, p2); err != nil {
-		t.Fatalf("second Save (ON CONFLICT DO NOTHING): %v", err)
+	err := repo.Save(ctx, p2)
+	if !apperror.IsCode(err, apperror.CodeAlreadyExists) {
+		t.Fatalf("second Save with same reference: expected ALREADY_EXISTS, got %v", err)
+	}
+
+	// The rejected payment must leave no trace: no events, no outbox rows.
+	var events, outbox int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM payment_events WHERE aggregate_id = $1`, p2.ID).Scan(&events); err != nil {
+		t.Fatalf("count payment_events: %v", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = $1`, p2.ID).Scan(&outbox); err != nil {
+		t.Fatalf("count outbox_events: %v", err)
+	}
+	if events != 0 || outbox != 0 {
+		t.Errorf("phantom rows for rejected payment: payment_events=%d outbox_events=%d", events, outbox)
 	}
 }

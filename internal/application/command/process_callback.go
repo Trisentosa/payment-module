@@ -2,8 +2,9 @@ package command
 
 import (
 	"context"
-	"encoding/json"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/Trisentosa/payment-module/internal/application/ports"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
@@ -14,7 +15,7 @@ import (
 type ProcessCallbackCommand struct {
 	GatewayType string
 	RawPayload  []byte
-	Signature   string
+	Headers     map[string][]string
 }
 
 type ProcessCallbackHandler struct {
@@ -35,17 +36,13 @@ func (h *ProcessCallbackHandler) Handle(ctx context.Context, cmd ProcessCallback
 		return apperror.InvalidInput("unknown gateway: " + cmd.GatewayType)
 	}
 
-	if err = gw.VerifyWebhookSignature(cmd.RawPayload, cmd.Signature); err != nil {
-		log.Warn("webhook signature invalid", "gateway", cmd.GatewayType)
+	n, err := gw.ParseWebhook(cmd.RawPayload, cmd.Headers)
+	if err != nil {
+		log.Warn("webhook rejected", "gateway", cmd.GatewayType, "err", err)
 		return err
 	}
 
-	var n map[string]string
-	_ = json.Unmarshal(cmd.RawPayload, &n)
-	gatewayTxID := n["transaction_id"]
-	gatewayStatus := n["transaction_status"]
-
-	p, err := h.repo.FindByGatewayTransactionID(ctx, gatewayTxID)
+	p, err := h.findPayment(ctx, n)
 	if err != nil {
 		return err
 	}
@@ -55,15 +52,15 @@ func (h *ProcessCallbackHandler) Handle(ctx context.Context, cmd ProcessCallback
 		return nil
 	}
 
-	switch gatewayStatus {
-	case "settlement", "capture":
+	switch n.Status {
+	case ports.TransactionSettled:
 		if err = p.MarkCompleted(time.Now().UTC()); err != nil {
 			return err
 		}
-	case "deny", "cancel", "expire", "failure":
-		p.MarkFailed(gatewayStatus, "gateway status: "+gatewayStatus)
+	case ports.TransactionFailed:
+		p.MarkFailed(n.GatewayStatus, "gateway status: "+n.GatewayStatus)
 	default:
-		log.Warn("unhandled gateway status", "status", gatewayStatus)
+		log.Info("webhook status needs no transition", "payment_id", p.ID, "gateway_status", n.GatewayStatus)
 		return nil
 	}
 
@@ -75,4 +72,17 @@ func (h *ProcessCallbackHandler) Handle(ctx context.Context, cmd ProcessCallback
 
 	log.Info("webhook processed", "payment_id", p.ID, "new_status", p.Status)
 	return nil
+}
+
+// findPayment resolves the notification by the payment ID the gateway echoed back. Payments
+// created before IDs were sent as the order ID carry the caller's reference there instead,
+// so those fall back to the gateway's transaction ID.
+func (h *ProcessCallbackHandler) findPayment(ctx context.Context, n *ports.WebhookNotification) (*payment.Payment, error) {
+	if id, err := uuid.Parse(n.PaymentID); err == nil {
+		p, err := h.repo.FindByID(ctx, id)
+		if !apperror.IsCode(err, apperror.CodeNotFound) {
+			return p, err
+		}
+	}
+	return h.repo.FindByGatewayTransactionID(ctx, n.GatewayTransactionID)
 }

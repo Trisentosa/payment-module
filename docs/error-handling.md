@@ -9,7 +9,7 @@
 | `INVALID_INPUT` | 400 | Bad request data from caller |
 | `INVALID_STATE` | 422 | State transition not allowed |
 | `GATEWAY_ERROR` | 502 | External gateway call failed |
-| `IDEMPOTENCY_CONFLICT` | 409 | Same idempotency key, different payload |
+| `IDEMPOTENCY_CONFLICT` | 409 | Same idempotency key with a different payload, or an identical request still in progress |
 | `INTERNAL_ERROR` | 500 | Unexpected internal failure |
 
 ## Usage by Layer

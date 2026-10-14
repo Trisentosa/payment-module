@@ -33,7 +33,7 @@ WHERE status IN ('PENDING', 'INITIATED')
   AND deleted_at IS NULL
 LIMIT $1;
 
--- name: InsertPayment :exec
+-- name: InsertPayment :execrows
 INSERT INTO payments (
     id, reference_id, caller_service, gateway_type, gateway_transaction_id,
     status, amount, currency, payment_method_type,

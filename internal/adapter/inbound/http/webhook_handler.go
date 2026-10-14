@@ -7,7 +7,6 @@ import (
 
 	"github.com/Trisentosa/payment-module/internal/adapter/inbound/http/middleware"
 	"github.com/Trisentosa/payment-module/internal/application/command"
-	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
 )
 
 type WebhookHandler struct {
@@ -25,19 +24,12 @@ func (h *WebhookHandler) HandleMidtrans(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	var n map[string]string
-	_ = json.Unmarshal(payload, &n)
-
 	err = h.callbackHandler.Handle(r.Context(), command.ProcessCallbackCommand{
 		GatewayType: "MIDTRANS",
 		RawPayload:  payload,
-		Signature:   n["signature_key"],
+		Headers:     r.Header,
 	})
 	if err != nil {
-		if apperror.IsCode(err, apperror.CodeInvalidInput) {
-			http.Error(w, "invalid signature", http.StatusBadRequest)
-			return
-		}
 		middleware.WriteError(w, err)
 		return
 	}

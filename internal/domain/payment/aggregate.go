@@ -30,7 +30,7 @@ type Payment struct {
 	GatewayTransactionID    string
 	Status                  Status
 	Amount                  Money
-	PaymentMethodType       string
+	PaymentMethodType       Method
 	CustomerInfo            CustomerInfo
 	Metadata                map[string]any
 	GatewayRequestPayload   map[string]any
@@ -50,7 +50,7 @@ func New(
 	referenceID, callerService string,
 	amount Money,
 	gatewayType GatewayType,
-	methodType string,
+	method Method,
 	customer CustomerInfo,
 	description string,
 	expiredAt *time.Time,
@@ -62,6 +62,9 @@ func New(
 	if callerService == "" {
 		return nil, apperror.InvalidInput("caller_service is required")
 	}
+	if !knownMethods[method] {
+		return nil, apperror.InvalidInput("unsupported payment_method_type: " + string(method))
+	}
 
 	now := time.Now().UTC()
 	p := &Payment{
@@ -71,7 +74,7 @@ func New(
 		GatewayType:       gatewayType,
 		Status:            StatusInitiated,
 		Amount:            amount,
-		PaymentMethodType: methodType,
+		PaymentMethodType: method,
 		CustomerInfo:      customer,
 		Description:       description,
 		ExpiredAt:         expiredAt,

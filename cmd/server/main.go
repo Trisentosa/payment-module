@@ -178,7 +178,7 @@ func main() {
 		Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
 		Handler:      handler,
 		ReadTimeout:  10 * time.Second,
-		WriteTimeout: 10 * time.Second,
+		WriteTimeout: 30 * time.Second, // matches the default Midtrans timeout (MIDTRANS_TIMEOUT_MS)
 		IdleTimeout:  60 * time.Second,
 	}
 
