@@ -10,7 +10,8 @@ import (
 )
 
 const (
-	AdminKeyScopes adminKeyContextKey = "AdminKey.Scopes"
+	AdminKeyScopes  adminKeyContextKey  = "AdminKey.Scopes"
+	CallerKeyScopes callerKeyContextKey = "CallerKey.Scopes"
 )
 
 // Defines values for AdminForceExpireResponseStatus.
@@ -546,6 +547,10 @@ type BadRequest = ErrorResponse
 // constant that maps to `apperror.Code` on the server.
 type Conflict = ErrorResponse
 
+// Forbidden All error responses share this shape. The `code` field is a machine-readable
+// constant that maps to `apperror.Code` on the server.
+type Forbidden = ErrorResponse
+
 // InternalError All error responses share this shape. The `code` field is a machine-readable
 // constant that maps to `apperror.Code` on the server.
 type InternalError = ErrorResponse
@@ -574,6 +579,9 @@ type UnprocessableEntity = ErrorResponse
 // adminKeyContextKey is the context key for AdminKey security scheme
 type adminKeyContextKey string
 
+// callerKeyContextKey is the context key for CallerKey security scheme
+type callerKeyContextKey string
+
 // AdminListPaymentsParams defines parameters for AdminListPayments.
 type AdminListPaymentsParams struct {
 	Status        *string `form:"status,omitempty" json:"status,omitempty"`
@@ -592,30 +600,30 @@ type AdminListPaymentsParams struct {
 
 // CreatePaymentParams defines parameters for CreatePayment.
 type CreatePaymentParams struct {
-	// XServiceName Identifier of the calling service. Used for idempotency key scoping
-	// and audit logging. Must be stable across retries.
-	XServiceName XServiceName `json:"X-Service-Name"`
+	// XServiceName Optional. The calling service is identified by its API key, not by this header.
+	// If sent, it must name the key's own service, otherwise the request fails with 403.
+	XServiceName *XServiceName `json:"X-Service-Name,omitempty"`
 }
 
 // CancelPaymentParams defines parameters for CancelPayment.
 type CancelPaymentParams struct {
-	// XServiceName Identifier of the calling service. Used for idempotency key scoping
-	// and audit logging. Must be stable across retries.
-	XServiceName XServiceName `json:"X-Service-Name"`
+	// XServiceName Optional. The calling service is identified by its API key, not by this header.
+	// If sent, it must name the key's own service, otherwise the request fails with 403.
+	XServiceName *XServiceName `json:"X-Service-Name,omitempty"`
 }
 
 // ListRefundsParams defines parameters for ListRefunds.
 type ListRefundsParams struct {
-	// XServiceName Identifier of the calling service. Used for idempotency key scoping
-	// and audit logging. Must be stable across retries.
-	XServiceName XServiceName `json:"X-Service-Name"`
+	// XServiceName Optional. The calling service is identified by its API key, not by this header.
+	// If sent, it must name the key's own service, otherwise the request fails with 403.
+	XServiceName *XServiceName `json:"X-Service-Name,omitempty"`
 }
 
 // CreateRefundParams defines parameters for CreateRefund.
 type CreateRefundParams struct {
-	// XServiceName Identifier of the calling service. Used for idempotency key scoping
-	// and audit logging. Must be stable across retries.
-	XServiceName XServiceName `json:"X-Service-Name"`
+	// XServiceName Optional. The calling service is identified by its API key, not by this header.
+	// If sent, it must name the key's own service, otherwise the request fails with 403.
+	XServiceName *XServiceName `json:"X-Service-Name,omitempty"`
 }
 
 // AdminCreateRefundJSONRequestBody defines body for AdminCreateRefund for application/json ContentType.

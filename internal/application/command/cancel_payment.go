@@ -6,6 +6,7 @@ import (
 	"github.com/Trisentosa/payment-module/internal/application/ports"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
 	"github.com/Trisentosa/payment-module/internal/infrastructure/logger"
+	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
 	"github.com/google/uuid"
 )
 
@@ -17,10 +18,11 @@ type CancelPaymentCommand struct {
 type CancelPaymentHandler struct {
 	repo    payment.Repository
 	factory ports.GatewayFactory
+	cache   ports.CachePort
 }
 
-func NewCancelPaymentHandler(repo payment.Repository, factory ports.GatewayFactory) *CancelPaymentHandler {
-	return &CancelPaymentHandler{repo: repo, factory: factory}
+func NewCancelPaymentHandler(repo payment.Repository, factory ports.GatewayFactory, cache ports.CachePort) *CancelPaymentHandler {
+	return &CancelPaymentHandler{repo: repo, factory: factory, cache: cache}
 }
 
 func (h *CancelPaymentHandler) Handle(ctx context.Context, cmd CancelPaymentCommand) error {
@@ -29,6 +31,10 @@ func (h *CancelPaymentHandler) Handle(ctx context.Context, cmd CancelPaymentComm
 	p, err := h.repo.FindByID(ctx, cmd.PaymentID)
 	if err != nil {
 		return err
+	}
+	if p.CallerService != cmd.CallerService {
+		// Same answer as a missing payment, so callers can't probe each other's payments.
+		return apperror.NotFound("payment not found: " + cmd.PaymentID.String())
 	}
 
 	if err = p.Cancel(); err != nil {
@@ -45,6 +51,7 @@ func (h *CancelPaymentHandler) Handle(ctx context.Context, cmd CancelPaymentComm
 	if err = h.repo.Save(ctx, p); err != nil {
 		return err
 	}
+	ports.DropCachedPayment(ctx, h.cache, p)
 
 	log.Info("payment cancelled", "payment_id", p.ID)
 	return nil

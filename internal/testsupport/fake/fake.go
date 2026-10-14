@@ -22,6 +22,7 @@ type PaymentRepo struct {
 	byID      map[uuid.UUID]*payment.Payment
 	Events    []payment.DomainEvent // every event persisted by Save, in order
 	SaveCalls int
+	lastList  payment.ListFilter
 }
 
 // NewPaymentRepo stores the seed payments as already persisted (their pending events are dropped).
@@ -106,8 +107,18 @@ func clone(p *payment.Payment) *payment.Payment {
 
 func (r *PaymentRepo) FindExpired(context.Context, int) ([]*payment.Payment, error) { return nil, nil }
 
-func (r *PaymentRepo) ListPaginated(context.Context, payment.ListFilter) ([]*payment.Payment, error) {
+func (r *PaymentRepo) ListPaginated(_ context.Context, f payment.ListFilter) ([]*payment.Payment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.lastList = f
 	return nil, nil
+}
+
+// LastListFilter returns the filter of the most recent ListPaginated call.
+func (r *PaymentRepo) LastListFilter() payment.ListFilter {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lastList
 }
 
 func (r *PaymentRepo) UpdateStatus(_ context.Context, id uuid.UUID, status payment.Status, _ map[string]any) error {

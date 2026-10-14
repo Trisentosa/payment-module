@@ -9,6 +9,7 @@ import (
 	"time"
 
 	httpAdapter "github.com/Trisentosa/payment-module/internal/adapter/inbound/http"
+	"github.com/Trisentosa/payment-module/internal/adapter/inbound/http/middleware"
 	"github.com/Trisentosa/payment-module/internal/application/command"
 	"github.com/Trisentosa/payment-module/internal/application/query"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
@@ -17,7 +18,7 @@ import (
 )
 
 type refundAPI struct {
-	mux *http.ServeMux
+	mux http.Handler
 	gw  *fake.Gateway
 	id  string
 }
@@ -42,12 +43,14 @@ func newRefundAPI(t *testing.T) *refundAPI {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /payments/{id}/refunds", h.CreateRefund)
 	mux.HandleFunc("GET /payments/{id}/refunds", h.ListRefunds)
-	return &refundAPI{mux: mux, gw: gw, id: p.ID.String()}
+	return &refundAPI{mux: middleware.CallerAuth(callerKeys)(mux), gw: gw, id: p.ID.String()}
 }
 
+// do calls the refunds endpoint as caller ("order-service" or "billing-service").
 func (a *refundAPI) do(method, caller, body string) *httptest.ResponseRecorder {
+	key := map[string]string{"order-service": orderKey, "billing-service": billingKey}[caller]
 	req := httptest.NewRequest(method, "/payments/"+a.id+"/refunds", strings.NewReader(body))
-	req.Header.Set("X-Service-Name", caller)
+	req.Header.Set("Authorization", "Bearer "+key)
 	rec := httptest.NewRecorder()
 	a.mux.ServeHTTP(rec, req)
 	return rec

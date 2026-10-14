@@ -96,7 +96,7 @@ func main() {
 	// Command handlers
 	createPaymentHandler := command.NewCreatePaymentHandler(paymentRepo, gatewayFactory, outboxWriter)
 	processCallbackHandler := command.NewProcessCallbackHandler(paymentRepo, gatewayFactory, redisClient)
-	cancelPaymentHandler := command.NewCancelPaymentHandler(paymentRepo, gatewayFactory)
+	cancelPaymentHandler := command.NewCancelPaymentHandler(paymentRepo, gatewayFactory, redisClient)
 	forceExpireHandler := command.NewForceExpireHandler(paymentRepo, redisClient)
 	refundPaymentHandler := command.NewRefundPaymentHandler(paymentRepo, gatewayFactory, redisClient)
 
@@ -150,16 +150,19 @@ func main() {
 
 	mux.HandleFunc("GET /readyz", readyzHandler(pool, redisClient, mqPublisher))
 
-	// Write
-	mux.HandleFunc("POST /payments", paymentHandler.CreatePayment)
-	mux.HandleFunc("DELETE /payments/{id}", paymentHandler.CancelPayment)
-	mux.HandleFunc("POST /payments/{id}/refunds", refundHandler.CreateRefund)
+	// Caller API: every route requires a service API key (see cmd/apikey).
+	callerMux := http.NewServeMux()
+	callerMux.HandleFunc("POST /payments", paymentHandler.CreatePayment)
+	callerMux.HandleFunc("DELETE /payments/{id}", paymentHandler.CancelPayment)
+	callerMux.HandleFunc("POST /payments/{id}/refunds", refundHandler.CreateRefund)
+	callerMux.HandleFunc("GET /payments", paymentHandler.ListPayments)
+	callerMux.HandleFunc("GET /payments/{id}", paymentHandler.GetPayment)
+	callerMux.HandleFunc("GET /payments/ref/{reference_id}", paymentHandler.GetPaymentByRef)
+	callerMux.HandleFunc("GET /payments/{id}/refunds", refundHandler.ListRefunds)
 
-	// Read
-	mux.HandleFunc("GET /payments", paymentHandler.ListPayments)
-	mux.HandleFunc("GET /payments/{id}", paymentHandler.GetPayment)
-	mux.HandleFunc("GET /payments/ref/{reference_id}", paymentHandler.GetPaymentByRef)
-	mux.HandleFunc("GET /payments/{id}/refunds", refundHandler.ListRefunds)
+	callerProtected := httpMiddleware.CallerAuth(cfg.Callers.KeyHashes)(callerMux)
+	mux.Handle("/payments", callerProtected)
+	mux.Handle("/payments/", callerProtected)
 
 	// Webhooks
 	mux.HandleFunc("POST /webhooks/midtrans", webhookHandler.HandleMidtrans)

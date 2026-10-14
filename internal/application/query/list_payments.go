@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
+	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
 )
 
 type ListPaymentsQuery struct {
@@ -30,6 +31,10 @@ func NewListPaymentsHandler(repo payment.Repository) *ListPaymentsHandler {
 }
 
 func (h *ListPaymentsHandler) Handle(ctx context.Context, q ListPaymentsQuery) (*ListPaymentsResult, error) {
+	// An empty caller would list every service's payments.
+	if q.CallerService == "" {
+		return nil, apperror.InvalidInput("caller_service is required")
+	}
 	limit := q.Limit
 	if limit <= 0 || limit > 100 {
 		limit = 50

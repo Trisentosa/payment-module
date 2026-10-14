@@ -9,6 +9,7 @@ import (
 
 	"github.com/Trisentosa/payment-module/internal/application/ports"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
+	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
 )
 
 type PaymentDTO struct {
@@ -30,7 +31,10 @@ type PaymentDTO struct {
 	UpdatedAt            time.Time      `json:"updated_at"`
 }
 
-type GetPaymentQuery struct{ ID uuid.UUID }
+type GetPaymentQuery struct {
+	ID            uuid.UUID
+	CallerService string // only the service that created the payment may read it
+}
 
 type GetPaymentHandler struct {
 	repo     payment.Repository
@@ -43,7 +47,20 @@ func NewGetPaymentHandler(repo payment.Repository, cache ports.CachePort, ttlFn 
 }
 
 func (h *GetPaymentHandler) Handle(ctx context.Context, q GetPaymentQuery) (*PaymentDTO, error) {
-	cacheKey := ports.PaymentCacheKey(q.ID.String())
+	dto, err := h.load(ctx, q.ID)
+	if err != nil {
+		return nil, err
+	}
+	if dto.CallerService != q.CallerService {
+		// Same answer as a missing payment, so callers can't probe each other's payments.
+		return nil, apperror.NotFound("payment not found: " + q.ID.String())
+	}
+	return dto, nil
+}
+
+// load reads the payment view from cache, falling back to the database.
+func (h *GetPaymentHandler) load(ctx context.Context, id uuid.UUID) (*PaymentDTO, error) {
+	cacheKey := ports.PaymentCacheKey(id.String())
 
 	raw, err := h.cache.Get(ctx, cacheKey)
 	if err == nil {
@@ -53,7 +70,7 @@ func (h *GetPaymentHandler) Handle(ctx context.Context, q GetPaymentQuery) (*Pay
 		}
 	}
 
-	p, err := h.repo.FindByID(ctx, q.ID)
+	p, err := h.repo.FindByID(ctx, id)
 	if err != nil {
 		return nil, err
 	}

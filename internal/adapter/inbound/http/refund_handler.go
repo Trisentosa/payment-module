@@ -47,7 +47,7 @@ func (h *RefundHandler) create(w http.ResponseWriter, r *http.Request, admin boo
 		PaymentID:     id,
 		ReferenceID:   req.ReferenceID,
 		Reason:        derefStr(req.Reason),
-		CallerService: r.Header.Get("X-Service-Name"),
+		CallerService: middleware.CallerService(r.Context()),
 		Admin:         admin,
 	}
 	if req.Amount != nil {
@@ -79,7 +79,7 @@ func (h *RefundHandler) ListRefunds(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p, err := h.list.Handle(r.Context(), query.ListRefundsQuery{PaymentID: id, CallerService: r.Header.Get("X-Service-Name")})
+	p, err := h.list.Handle(r.Context(), query.ListRefundsQuery{PaymentID: id, CallerService: middleware.CallerService(r.Context())})
 	if err != nil {
 		middleware.WriteError(w, err)
 		return

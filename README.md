@@ -34,7 +34,14 @@ make migrate  # runs DB migrations
 make run      # go run ./cmd/server — restarts instantly on code changes
 ```
 
-The service is now reachable at `http://localhost:8080`.
+The service is now reachable at `http://localhost:8080`. Payment endpoints need a caller
+API key; `.env.example` configures a local-only one:
+
+```sh
+curl -H "Authorization: Bearer pgk_local-dev-only-do-not-use-in-prod" localhost:8080/payments
+```
+
+Issue real keys with `go run ./cmd/apikey <service-name>` (see [docs/security.md](docs/security.md)).
 
 | Endpoint | Purpose |
 |----------|---------|

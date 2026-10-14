@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+
+	"github.com/Trisentosa/payment-module/internal/pkg/apikey"
 )
 
 type Config struct {
@@ -15,6 +17,7 @@ type Config struct {
 	Log      Log
 	OTel     OTel
 	Admin    Admin
+	Callers  Callers
 }
 
 type Server struct {
@@ -61,6 +64,15 @@ type Admin struct {
 	Key string
 }
 
+// Callers holds the services allowed to call the payments API.
+type Callers struct {
+	// KeyHashes maps the SHA-256 hex of each API key to the service it identifies.
+	KeyHashes map[string]string
+}
+
+// minAdminKeyLength rejects trivially guessable admin keys.
+const minAdminKeyLength = 32
+
 func Load() (Config, error) {
 	dbPort, err := strconv.Atoi(getEnv("DB_PORT", "5432"))
 	if err != nil {
@@ -81,6 +93,20 @@ func Load() (Config, error) {
 	midtransTimeoutMs, err := strconv.Atoi(getEnv("MIDTRANS_TIMEOUT_MS", "30000"))
 	if err != nil {
 		return Config{}, fmt.Errorf("invalid MIDTRANS_TIMEOUT_MS: %w", err)
+	}
+
+	// Both secrets are required: without them the admin API or the payments API would
+	// either be open to anyone or reject everyone.
+	adminKey := os.Getenv("ADMIN_API_KEY")
+	if len(adminKey) < minAdminKeyLength {
+		return Config{}, fmt.Errorf("ADMIN_API_KEY must be set to at least %d characters", minAdminKeyLength)
+	}
+	callerKeys, err := apikey.ParseHashes(os.Getenv("CALLER_API_KEYS"))
+	if err != nil {
+		return Config{}, fmt.Errorf("invalid CALLER_API_KEYS: %w", err)
+	}
+	if len(callerKeys) == 0 {
+		return Config{}, fmt.Errorf("CALLER_API_KEYS must list at least one service:sha256 entry; generate one with `go run ./cmd/apikey <service>`")
 	}
 
 	midtransEnv := getEnv("MIDTRANS_ENV", "sandbox")
@@ -121,8 +147,9 @@ func Load() (Config, error) {
 			ServiceName: getEnv("OTEL_SERVICE_NAME", "paygate-service"),
 		},
 		Admin: Admin{
-			Key: getEnv("ADMIN_API_KEY", ""),
+			Key: adminKey,
 		},
+		Callers: Callers{KeyHashes: callerKeys},
 	}, nil
 }
 

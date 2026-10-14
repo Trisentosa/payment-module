@@ -6,8 +6,12 @@ info:
     Payment gateway abstraction layer. Accepts payment creation and cancellation
     requests and routes them to the configured downstream gateway (currently Midtrans).
 
+    **Authentication**: payment and refund endpoints require the calling service's API key
+    as `Authorization: Bearer <key>`. The key identifies the service; a service only sees
+    and changes its own payments (others' answer 404, as if missing).
+
     **Idempotency**: `POST /payments` is idempotent on the composite key
-    `(X-Service-Name, reference_id)`. Replaying the same pair within the TTL
+    `(calling service, reference_id)`. Replaying the same pair within the TTL
     (24 h) returns the cached 201 response with the `X-Idempotent-Replay: true`
     header set.
 
@@ -16,6 +20,9 @@ info:
 
     **Admin API**: routes under `/api/v1/admin/` require the `X-Admin-Key` header.
     They are intended for internal ops tooling and dashboards, not for service-to-service integration.
+
+security:
+  - CallerKey: []
 
 servers:
   - url: /
@@ -271,6 +278,10 @@ paths:
             schema:
               $ref: "#/components/schemas/CreatePaymentRequest"
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "201":
           description: Payment initiated successfully
           headers:
@@ -305,6 +316,10 @@ paths:
             format: uuid
           description: UUID of the payment returned by CreatePayment
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "200":
           description: Payment cancelled
           content:
@@ -343,6 +358,10 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateRefundRequest"
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "200":
           $ref: "#/components/responses/RefundReplayed"
         "201":
@@ -367,6 +386,10 @@ paths:
         - $ref: "#/components/parameters/XServiceName"
         - $ref: "#/components/parameters/PaymentID"
       responses:
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
         "200":
           description: Refunds, oldest first
           content:
@@ -380,6 +403,12 @@ paths:
 
 components:
   securitySchemes:
+    CallerKey:
+      type: http
+      scheme: bearer
+      description: |
+        Per-service API key, issued with `go run ./cmd/apikey <service>`. PayGate stores only
+        its SHA-256 hash (CALLER_API_KEYS).
     AdminKey:
       type: apiKey
       in: header
@@ -408,13 +437,13 @@ components:
     XServiceName:
       name: X-Service-Name
       in: header
-      required: true
+      required: false
       schema:
         type: string
         example: order-service
       description: |
-        Identifier of the calling service. Used for idempotency key scoping
-        and audit logging. Must be stable across retries.
+        Optional. The calling service is identified by its API key, not by this header.
+        If sent, it must name the key's own service, otherwise the request fails with 403.
 
   schemas:
     AdminPayment:
@@ -974,7 +1003,13 @@ components:
 
   responses:
     Unauthorized:
-      description: Missing or invalid X-Admin-Key header
+      description: Missing or invalid credentials (API key for caller endpoints, X-Admin-Key for admin endpoints)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+    Forbidden:
+      description: X-Service-Name names a different service than the API key
       content:
         application/json:
           schema:

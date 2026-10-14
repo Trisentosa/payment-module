@@ -91,10 +91,9 @@ Only **public API** endpoints belong in the spec:
 
 ## Idempotency Key Scoping
 
-The spec documents that `POST /payments` is idempotent on
-`(X-Service-Name, reference_id)`. The `X-Service-Name` header is **required**
-on all mutating requests — omitting it will prevent correct idempotency scoping
-even if the server does not currently enforce its presence at the HTTP layer.
+`POST /payments` is idempotent on `(calling service, reference_id)`, where the calling
+service comes from the request's API key (see [security.md](security.md)). The
+`X-Service-Name` header is optional; if sent, it must match the key's service.
 
 ## Error Contract
 
