@@ -88,6 +88,7 @@ func newAdminAPI(t *testing.T, repo *fake.PaymentRepo, reader *adminReader) http
 	t.Helper()
 	h := httpAdapter.NewAdminHandler(
 		query.NewAdminListPaymentsHandler(repo),
+		query.NewGetPaymentHandler(repo, fake.NewCache(), func(payment.Status) time.Duration { return time.Minute }),
 		query.NewGetAttemptsHandler(reader),
 		query.NewGetEventsHandler(reader),
 		query.NewGetRefundsHandler(reader),
@@ -96,6 +97,7 @@ func newAdminAPI(t *testing.T, repo *fake.PaymentRepo, reader *adminReader) http
 	)
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/admin/payments", h.ListPayments)
+	mux.HandleFunc("GET /api/v1/admin/payments/{id}", h.GetPaymentDetail)
 	mux.HandleFunc("GET /api/v1/admin/payments/{id}/attempts", h.ListPaymentAttempts)
 	mux.HandleFunc("POST /api/v1/admin/payments/{id}/expire", h.ForceExpire)
 	mux.HandleFunc("GET /api/v1/admin/outbox/stats", h.OutboxStats)
@@ -133,6 +135,27 @@ func TestAdmin_ListFiltersAcrossCallers(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if resp.Meta.Count != 1 || resp.Data[0].ReferenceID != "ADM-B" {
 		t.Errorf("filtered: %s", rec.Body)
+	}
+}
+
+func TestAdmin_DetailIncludesThePaymentOfAnyCaller(t *testing.T) {
+	p := pendingQRIS(t, "ADM-D")
+	p.CallerService = "billing-service"
+	api := newAdminAPI(t, fake.NewPaymentRepo(p), &adminReader{})
+
+	rec := adminDo(api, http.MethodGet, "/api/v1/admin/payments/"+p.ID.String())
+	var resp struct {
+		Payment struct {
+			ReferenceID string `json:"reference_id"`
+		} `json:"payment"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if rec.Code != http.StatusOK || resp.Payment.ReferenceID != "ADM-D" {
+		t.Errorf("detail: status %d body %s", rec.Code, rec.Body)
+	}
+
+	if rec := adminDo(api, http.MethodGet, "/api/v1/admin/payments/"+uuid.NewString()); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown payment: status %d, want 404", rec.Code)
 	}
 }
 

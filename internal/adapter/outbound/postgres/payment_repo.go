@@ -316,10 +316,10 @@ func (r *PaymentRepo) ListPaginated(ctx context.Context, f payment.ListFilter) (
 		args = append(args, *f.To)
 		i++
 	}
-	if f.Cursor != nil {
-		where = append(where, fmt.Sprintf("created_at < $%d", i))
-		args = append(args, *f.Cursor)
-		i++
+	if f.After != nil {
+		where = append(where, fmt.Sprintf("(created_at, id) < ($%d, $%d)", i, i+1))
+		args = append(args, f.After.CreatedAt, f.After.ID)
+		i += 2
 	}
 
 	limit := f.Limit
@@ -339,7 +339,7 @@ func (r *PaymentRepo) ListPaginated(ctx context.Context, f payment.ListFilter) (
 			q += " AND " + c
 		}
 	}
-	q += fmt.Sprintf(" ORDER BY created_at DESC LIMIT $%d", i)
+	q += fmt.Sprintf(" ORDER BY created_at DESC, id DESC LIMIT $%d", i)
 	args = append(args, int32(limit))
 
 	rows, err := r.pool.Query(ctx, q, args...)

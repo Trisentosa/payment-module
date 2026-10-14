@@ -70,25 +70,23 @@ paths:
           schema:
             type: string
             format: date-time
-        - name: cursor
-          in: query
-          description: Opaque cursor (created_at of last row in previous page)
-          schema:
-            type: string
-            format: date-time
+        - $ref: "#/components/parameters/Cursor"
         - name: limit
           in: query
+          description: Page size. Values above 100 return 100.
           schema:
             type: integer
             default: 20
-            maximum: 100
+            minimum: 1
       responses:
         "200":
-          description: Paginated payment list
+          description: Payments of every caller, newest first
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AdminListPaymentsResponse"
+                $ref: "#/components/schemas/PaymentListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "500":
@@ -265,6 +263,51 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   /payments:
+    get:
+      operationId: ListPayments
+      summary: List the caller's payments, newest first
+      tags: [payments]
+      parameters:
+        - $ref: "#/components/parameters/XServiceName"
+        - name: status
+          in: query
+          schema:
+            $ref: "#/components/schemas/PaymentStatus"
+        - name: from
+          in: query
+          description: Only payments created at or after this time
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          description: Only payments created at or before this time
+          schema:
+            type: string
+            format: date-time
+        - $ref: "#/components/parameters/Cursor"
+        - name: limit
+          in: query
+          description: Page size. Values above 100 return 100.
+          schema:
+            type: integer
+            default: 50
+            minimum: 1
+      responses:
+        "200":
+          description: One page of payments
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PaymentListResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "500":
+          $ref: "#/components/responses/InternalError"
     post:
       operationId: CreatePayment
       summary: Initiate a new payment
@@ -312,6 +355,31 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
 
   /payments/{id}:
+    get:
+      operationId: GetPayment
+      summary: Get one of the caller's payments
+      description: Another service's payment answers 404, as if it did not exist.
+      tags: [payments]
+      parameters:
+        - $ref: "#/components/parameters/XServiceName"
+        - $ref: "#/components/parameters/PaymentID"
+      responses:
+        "200":
+          description: The payment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
     delete:
       operationId: CancelPayment
       summary: Cancel a pending or initiated payment
@@ -340,6 +408,34 @@ paths:
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /payments/ref/{reference_id}:
+    get:
+      operationId: GetPaymentByReference
+      summary: Get one of the caller's payments by the reference_id it was created with
+      tags: [payments]
+      parameters:
+        - $ref: "#/components/parameters/XServiceName"
+        - name: reference_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: The payment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Payment"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -444,6 +540,13 @@ components:
         format: uuid
       description: UUID of the payment
 
+    Cursor:
+      name: cursor
+      in: query
+      description: next_cursor from the previous page, unchanged. Omit for the first page.
+      schema:
+        type: string
+
     XServiceName:
       name: X-Service-Name
       in: header
@@ -456,9 +559,17 @@ components:
         If sent, it must name the key's own service, otherwise the request fails with 403.
 
   schemas:
-    AdminPayment:
+    PaymentStatus:
+      type: string
+      enum: [INITIATED, PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED, EXPIRED, PARTIALLY_REFUNDED, REFUNDED]
+      description: |
+        INITIATED: stored, gateway outcome not yet known. PENDING: waiting for the customer to pay.
+        COMPLETED: paid. FAILED, CANCELLED, EXPIRED: closed without payment.
+        PARTIALLY_REFUNDED, REFUNDED: paid, then refunded in part or in full.
+
+    Payment:
       type: object
-      description: Payment summary returned by admin list and detail endpoints
+      description: A payment as stored by PayGate. Refund details are listed under /payments/{id}/refunds.
       required: [id, reference_id, caller_service, status, gateway, amount, currency, payment_method_type, customer, created_at, updated_at]
       properties:
         id:
@@ -472,8 +583,7 @@ components:
           type: string
           x-go-name: CallerService
         status:
-          type: string
-          enum: [INITIATED, PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED, EXPIRED, PARTIALLY_REFUNDED, REFUNDED]
+          $ref: "#/components/schemas/PaymentStatus"
         gateway:
           type: string
         gateway_transaction_id:
@@ -516,14 +626,14 @@ components:
           format: date-time
           x-go-name: UpdatedAt
 
-    AdminListPaymentsResponse:
+    PaymentListResponse:
       type: object
       required: [data, meta]
       properties:
         data:
           type: array
           items:
-            $ref: "#/components/schemas/AdminPayment"
+            $ref: "#/components/schemas/Payment"
         meta:
           type: object
           required: [count, has_more]
@@ -532,7 +642,7 @@ components:
               type: integer
             next_cursor:
               type: string
-              format: date-time
+              description: Opaque. Pass it as `cursor` to fetch the next page; absent on the last page.
               x-go-name: NextCursor
             has_more:
               type: boolean
@@ -638,12 +748,18 @@ components:
 
     AdminPaymentDetailResponse:
       type: object
-      required: [payment_id, attempts, events]
+      required: [payment_id, payment, attempts, events, refunds]
       properties:
         payment_id:
           type: string
           format: uuid
           x-go-name: PaymentID
+        payment:
+          $ref: "#/components/schemas/Payment"
+        refunds:
+          type: array
+          items:
+            $ref: "#/components/schemas/AdminRefund"
         attempts:
           type: array
           items:

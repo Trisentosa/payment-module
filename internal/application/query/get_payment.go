@@ -34,6 +34,7 @@ type PaymentDTO struct {
 type GetPaymentQuery struct {
 	ID            uuid.UUID
 	CallerService string // only the service that created the payment may read it
+	Admin         bool   // admins read any service's payment
 }
 
 type GetPaymentHandler struct {
@@ -51,7 +52,7 @@ func (h *GetPaymentHandler) Handle(ctx context.Context, q GetPaymentQuery) (*Pay
 	if err != nil {
 		return nil, err
 	}
-	if dto.CallerService != q.CallerService {
+	if !q.Admin && dto.CallerService != q.CallerService {
 		// Same answer as a missing payment, so callers can't probe each other's payments.
 		return nil, apperror.NotFound("payment not found: " + q.ID.String())
 	}

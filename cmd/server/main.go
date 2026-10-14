@@ -128,6 +128,7 @@ func main() {
 	refundHandler := httpAdapter.NewRefundHandler(refundPaymentHandler, listRefundsHandler)
 	adminHandler := httpAdapter.NewAdminHandler(
 		adminListHandler,
+		getPaymentHandler,
 		getAttemptsHandler,
 		getEventsHandler,
 		getRefundsHandler,

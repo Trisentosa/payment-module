@@ -1,6 +1,6 @@
 # PayGate
 
-A payment gateway abstraction service built in Go. Handles payment initiation, status tracking, and webhook processing across multiple gateway providers (Midtrans, Doku, Stripe).
+A payment gateway abstraction service built in Go. Other services create, cancel and refund payments through one API; PayGate talks to the gateway, tracks status from its webhooks, and announces every change on RabbitMQ. Midtrans is the only gateway implemented; the gateway port is built for more.
 
 ## Prerequisites
 
@@ -46,7 +46,8 @@ Issue real keys with `go run ./cmd/apikey <service-name>` (see [docs/security.md
 | Endpoint | Purpose |
 |----------|---------|
 | `GET /healthz` | Liveness probe |
-| `GET /readyz` | Readiness probe (checks DB) |
+| `GET /readyz` | Readiness probe (checks Postgres only; Redis and RabbitMQ always report ok for now) |
+| `GET /openapi.yaml` | The API contract ([docs/openapi.md](docs/openapi.md)) |
 
 > **Alternative — full Docker stack** (no Go toolchain needed):
 > ```sh
@@ -57,14 +58,11 @@ Issue real keys with `go run ./cmd/apikey <service-name>` (see [docs/security.md
 ## Running Tests
 
 ```sh
-make test
+make test               # unit tests, no Docker needed
+make test-integration   # adds Postgres and RabbitMQ tests (needs Docker)
 ```
 
-- **Domain unit tests** (`./internal/domain/...`) — no Docker required
-- **Postgres integration tests** (`./internal/adapter/outbound/postgres/...`, run with `make test-integration`) — use [`testcontainers-go`](https://testcontainers.com/), no `make up` required. Without Docker, point them at a throwaway database instead; it is wiped before every test:
-  ```sh
-  PAYGATE_TEST_DATABASE_URL="postgres://user@localhost:5432/paygate_test?sslmode=disable" make test-integration
-  ```
+Without Docker, the Postgres tests can run against a scratch database; see [docs/testing.md](docs/testing.md).
 
 ## Useful Commands
 
@@ -95,18 +93,16 @@ docker compose down -v && make up && make migrate
 ## Project Structure
 
 ```
-cmd/
-  server/       — service entry point (wires dependencies, starts HTTP server)
-  migrate/      — DB migration runner
+cmd/            — server, migrate, apikey (issues caller API keys)
 internal/
-  domain/       — business logic: aggregates, value objects, domain events, repository ports
-  adapter/
-    inbound/    — HTTP handlers and middleware
-    outbound/   — PostgreSQL repository implementations
-  infrastructure/ — config, logger, DB pool (no business logic)
-  pkg/apperror/ — shared error taxonomy
+  domain/       — the Payment aggregate, its refunds, statuses and events
+  application/  — use cases (command/, query/) and the ports they need
+  adapter/      — HTTP in; Postgres, Midtrans, RabbitMQ, Redis out
+  infrastructure/ — config, logger, DB pool, cache client (no business logic)
+  pkg/          — apperror, apikey
 migrations/     — SQL migration files (golang-migrate)
-docs/           — architecture, conventions, ADRs, and more
+api/            — openapi.yaml, the API contract
+docs/           — architecture, domain model, events, testing, ADRs, and more
 ```
 
-For a deeper dive see [docs/architecture.md](docs/architecture.md) and [docs/local-dev.md](docs/local-dev.md).
+For a deeper dive see [docs/architecture.md](docs/architecture.md), [docs/domain-model.md](docs/domain-model.md) and [docs/local-dev.md](docs/local-dev.md).

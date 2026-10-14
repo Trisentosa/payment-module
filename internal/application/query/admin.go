@@ -18,7 +18,7 @@ type AdminListPaymentsQuery struct {
 	ReferenceID   string
 	From          *time.Time
 	To            *time.Time
-	Cursor        *time.Time
+	Cursor        string // next_cursor of the previous page
 	Limit         int
 }
 
@@ -31,34 +31,14 @@ func NewAdminListPaymentsHandler(repo payment.Repository) *AdminListPaymentsHand
 }
 
 func (h *AdminListPaymentsHandler) Handle(ctx context.Context, q AdminListPaymentsQuery) (*ListPaymentsResult, error) {
-	limit := clampLimit(q.Limit, 20)
-
-	payments, err := h.repo.ListPaginated(ctx, payment.ListFilter{
+	return listPage(ctx, h.repo, payment.ListFilter{
 		Status:        q.Status,
 		CallerService: q.CallerService,
 		GatewayType:   q.GatewayType,
 		ReferenceID:   q.ReferenceID,
 		From:          q.From,
 		To:            q.To,
-		Cursor:        q.Cursor,
-		Limit:         limit + 1,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	var nextCursor *time.Time
-	if len(payments) > limit {
-		payments = payments[:limit]
-		t := payments[limit-1].CreatedAt
-		nextCursor = &t
-	}
-
-	dtos := make([]*PaymentDTO, 0, len(payments))
-	for _, p := range payments {
-		dtos = append(dtos, toDTO(p))
-	}
-	return &ListPaymentsResult{Payments: dtos, NextCursor: nextCursor}, nil
+	}, q.Cursor, clampLimit(q.Limit, 20))
 }
 
 // ------- get attempts -------

@@ -82,9 +82,10 @@ Only **public API** endpoints belong in the spec:
 
 | Endpoint | In spec? | Reason |
 |----------|----------|--------|
-| `POST /payments` | Yes | Caller-facing |
-| `DELETE /payments/{id}` | Yes | Caller-facing |
+| `POST /payments`, `GET /payments` | Yes | Caller-facing |
+| `GET /payments/{id}`, `DELETE /payments/{id}`, `GET /payments/ref/{reference_id}` | Yes | Caller-facing |
 | `POST /payments/{id}/refunds`, `GET /payments/{id}/refunds` | Yes | Caller-facing |
+| `/api/v1/admin/...` | Yes | Ops tooling; `X-Admin-Key` |
 | `POST /webhooks/midtrans` | **No** | Gateway-to-service callback; Midtrans owns the shape |
 | `GET /healthz`, `GET /readyz` | **No** | Infrastructure probes |
 | `GET /openapi.yaml` | **No** | Meta-endpoint |
@@ -94,6 +95,13 @@ Only **public API** endpoints belong in the spec:
 `POST /payments` is idempotent on `(calling service, reference_id)`, where the calling
 service comes from the request's API key (see [security.md](security.md)). The
 `X-Service-Name` header is optional; if sent, it must match the key's service.
+
+## Pagination
+
+List endpoints answer `{ "data": [...], "meta": { "count", "has_more", "next_cursor" } }`,
+newest first. Pass `next_cursor` back as `cursor` unchanged for the next page; it is opaque
+(it encodes the last row's `created_at` and `id`, so equal timestamps don't skip rows).
+Malformed `cursor`, `from`, `to` or `limit` answer 400; `limit` above 100 returns 100.
 
 ## Error Contract
 

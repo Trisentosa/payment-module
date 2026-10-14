@@ -34,7 +34,7 @@ func (h *RefundHandler) AdminCreateRefund(w http.ResponseWriter, r *http.Request
 func (h *RefundHandler) create(w http.ResponseWriter, r *http.Request, admin bool) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		middleware.WriteError(w, middleware.ErrInvalidJSON)
+		middleware.WriteError(w, middleware.ErrInvalidPaymentID)
 		return
 	}
 	var req CreateRefundRequest
@@ -75,7 +75,7 @@ func (h *RefundHandler) create(w http.ResponseWriter, r *http.Request, admin boo
 func (h *RefundHandler) ListRefunds(w http.ResponseWriter, r *http.Request) {
 	id, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
-		middleware.WriteError(w, middleware.ErrInvalidJSON)
+		middleware.WriteError(w, middleware.ErrInvalidPaymentID)
 		return
 	}
 

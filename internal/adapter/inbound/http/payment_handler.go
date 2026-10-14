@@ -3,7 +3,6 @@ package http
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -189,7 +188,7 @@ func (h *PaymentHandler) CancelPayment(w http.ResponseWriter, r *http.Request) {
 
 	cmd := command.CancelPaymentCommand{CallerService: callerService}
 	if err := cmd.PaymentID.Scan(paymentIDStr); err != nil {
-		middleware.WriteError(w, middleware.ErrInvalidJSON)
+		middleware.WriteError(w, middleware.ErrInvalidPaymentID)
 		return
 	}
 
@@ -210,7 +209,7 @@ func (h *PaymentHandler) GetPayment(w http.ResponseWriter, r *http.Request) {
 	idStr := r.PathValue("id")
 	id, err := uuid.Parse(idStr)
 	if err != nil {
-		middleware.WriteError(w, middleware.ErrInvalidJSON)
+		middleware.WriteError(w, middleware.ErrInvalidPaymentID)
 		return
 	}
 
@@ -242,43 +241,26 @@ func (h *PaymentHandler) GetPaymentByRef(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *PaymentHandler) ListPayments(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-
-	// Always the authenticated caller; a caller_service query parameter is ignored.
-	lq := query.ListPaymentsQuery{
-		Status:        q.Get("status"),
-		CallerService: middleware.CallerService(r.Context()),
-	}
-
-	if v := q.Get("from"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			lq.From = &t
-		}
-	}
-	if v := q.Get("to"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			lq.To = &t
-		}
-	}
-	if v := q.Get("cursor"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			lq.Cursor = &t
-		}
-	}
-	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			lq.Limit = n
-		}
-	}
-
-	result, err := h.listHandler.Handle(r.Context(), lq)
+	params, err := parseListParams(r.URL.Query())
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(result)
+	// Always the authenticated caller; a caller_service query parameter is ignored.
+	result, err := h.listHandler.Handle(r.Context(), query.ListPaymentsQuery{
+		Status:        r.URL.Query().Get("status"),
+		CallerService: middleware.CallerService(r.Context()),
+		From:          params.From,
+		To:            params.To,
+		Cursor:        params.Cursor,
+		Limit:         params.Limit,
+	})
+	if err != nil {
+		middleware.WriteError(w, err)
+		return
+	}
+	writePaymentList(w, result)
 }
 
 func derefStr(s *string) string {
