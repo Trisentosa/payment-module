@@ -14,12 +14,12 @@ import (
 )
 
 type AdminHandler struct {
-	listPayments  *query.AdminListPaymentsHandler
-	getAttempts   *query.GetAttemptsHandler
-	getEvents     *query.GetEventsHandler
-	getRefunds    *query.GetRefundsHandler
-	outboxStats   *query.GetOutboxStatsHandler
-	forceExpire   *command.ForceExpireHandler
+	listPayments *query.AdminListPaymentsHandler
+	getAttempts  *query.GetAttemptsHandler
+	getEvents    *query.GetEventsHandler
+	getRefunds   *query.GetRefundsHandler
+	outboxStats  *query.GetOutboxStatsHandler
+	forceExpire  *command.ForceExpireHandler
 }
 
 func NewAdminHandler(
@@ -203,10 +203,10 @@ func (h *AdminHandler) OutboxStats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"pending":                     stats.Pending,
-		"published":                   stats.Published,
-		"failed":                      stats.Failed,
-		"oldest_pending_age_seconds":  stats.OldestPendingAgeSecs,
+		"pending":                    stats.Pending,
+		"published":                  stats.Published,
+		"failed":                     stats.Failed,
+		"oldest_pending_age_seconds": stats.OldestPendingAgeSecs,
 	})
 }
 

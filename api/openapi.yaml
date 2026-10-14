@@ -157,6 +157,40 @@ paths:
           $ref: "#/components/responses/InternalError"
 
   /api/v1/admin/payments/{id}/refunds:
+    post:
+      operationId: AdminCreateRefund
+      summary: Refund a payment on behalf of any caller
+      description: Same as the caller endpoint, without the ownership check. Recorded with requested_by "admin".
+      tags: [admin]
+      security:
+        - AdminKey: []
+      parameters:
+        - $ref: "#/components/parameters/AdminPaymentID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRefundRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RefundReplayed"
+        "201":
+          $ref: "#/components/responses/RefundDecided"
+        "202":
+          $ref: "#/components/responses/RefundPending"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalError"
     get:
       operationId: AdminListRefunds
       summary: List refunds for a payment
@@ -284,6 +318,66 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /payments/{id}/refunds:
+    post:
+      operationId: CreateRefund
+      summary: Refund all or part of a completed payment
+      description: |
+        Refunds go through the payment's gateway. Methods the gateway can't refund through
+        its API (VIRTUAL_ACCOUNT on Midtrans) are rejected with 422; refund those customers
+        outside PayGate. SHOPEEPAY payments can only be refunded in full.
+
+        Idempotent on `(payment, reference_id)`: repeating a reference returns the original
+        refund with status 200 and `X-Idempotent-Replay: true`.
+
+        If the gateway's answer is lost (timeout), the refund stays PENDING (202) and settles
+        when the gateway's refund notification arrives. Its amount stays reserved meanwhile.
+      tags: [payments]
+      parameters:
+        - $ref: "#/components/parameters/XServiceName"
+        - $ref: "#/components/parameters/PaymentID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateRefundRequest"
+      responses:
+        "200":
+          $ref: "#/components/responses/RefundReplayed"
+        "201":
+          $ref: "#/components/responses/RefundDecided"
+        "202":
+          $ref: "#/components/responses/RefundPending"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      operationId: ListRefunds
+      summary: List a payment's refunds
+      tags: [payments]
+      parameters:
+        - $ref: "#/components/parameters/XServiceName"
+        - $ref: "#/components/parameters/PaymentID"
+      responses:
+        "200":
+          description: Refunds, oldest first
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RefundListResponse"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
 components:
   securitySchemes:
     AdminKey:
@@ -293,6 +387,15 @@ components:
       description: Elevated ops key required for all admin endpoints
 
   parameters:
+    PaymentID:
+      name: id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: UUID of the payment returned by CreatePayment
+
     AdminPaymentID:
       name: id
       in: path
@@ -331,7 +434,7 @@ components:
           x-go-name: CallerService
         status:
           type: string
-          enum: [INITIATED, PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED, EXPIRED, REFUND_REQUESTED, REFUNDED, REFUND_FAILED]
+          enum: [INITIATED, PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED, EXPIRED, PARTIALLY_REFUNDED, REFUNDED]
         gateway:
           type: string
         gateway_transaction_id:
@@ -668,9 +771,8 @@ components:
             - FAILED
             - CANCELLED
             - EXPIRED
-            - REFUND_REQUESTED
+            - PARTIALLY_REFUNDED
             - REFUNDED
-            - REFUND_FAILED
         amount:
           type: integer
           format: int64
@@ -727,6 +829,112 @@ components:
           x-go-name: ExpiresAt
           description: When the customer can no longer complete this action
 
+    CreateRefundRequest:
+      type: object
+      required: [reference_id]
+      properties:
+        reference_id:
+          type: string
+          x-go-name: ReferenceID
+          description: Caller-assigned identifier for this refund, unique per payment. Retries must reuse it.
+          example: "refund-9f3a1b-1"
+        amount:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Amount to refund. Omit to refund everything still refundable.
+          example: 50000
+        reason:
+          type: string
+          maxLength: 255
+          example: Item out of stock
+
+    Refund:
+      type: object
+      required: [refund_id, reference_id, amount, status, created_at]
+      properties:
+        refund_id:
+          type: string
+          format: uuid
+          x-go-name: RefundID
+          x-go-type: string
+        reference_id:
+          type: string
+          x-go-name: ReferenceID
+        amount:
+          type: integer
+          format: int64
+        status:
+          type: string
+          enum: [PENDING, SUCCEEDED, FAILED]
+          description: |
+            PENDING: waiting for the gateway; the amount is reserved.
+            SUCCEEDED: the gateway refunded it.
+            FAILED: the gateway declined it (see failure_reason); the amount is released.
+        reason:
+          type: string
+        failure_reason:
+          type: string
+          x-go-name: FailureReason
+        gateway_refund_id:
+          type: string
+          x-go-name: GatewayRefundID
+        created_at:
+          type: string
+          format: date-time
+          x-go-name: CreatedAt
+        completed_at:
+          type: string
+          format: date-time
+          x-go-name: CompletedAt
+
+    RefundPaymentSummary:
+      type: object
+      description: The refunded payment's state after the operation
+      required: [payment_id, status, amount, refunded_amount, refundable_amount]
+      properties:
+        payment_id:
+          type: string
+          format: uuid
+          x-go-name: PaymentID
+          x-go-type: string
+        status:
+          type: string
+          description: Payment status, e.g. COMPLETED, PARTIALLY_REFUNDED or REFUNDED
+        amount:
+          type: integer
+          format: int64
+        refunded_amount:
+          type: integer
+          format: int64
+          x-go-name: RefundedAmount
+          description: Total of SUCCEEDED refunds
+        refundable_amount:
+          type: integer
+          format: int64
+          x-go-name: RefundableAmount
+          description: What can still be refunded (amount minus SUCCEEDED and PENDING refunds)
+
+    RefundResponse:
+      type: object
+      required: [refund, payment]
+      properties:
+        refund:
+          $ref: "#/components/schemas/Refund"
+        payment:
+          $ref: "#/components/schemas/RefundPaymentSummary"
+
+    RefundListResponse:
+      type: object
+      required: [payment, data]
+      properties:
+        payment:
+          $ref: "#/components/schemas/RefundPaymentSummary"
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Refund"
+
     CancelPaymentResponse:
       type: object
       required:
@@ -778,7 +986,7 @@ components:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
     Conflict:
-      description: Duplicate resource or idempotency key conflict
+      description: Duplicate resource, idempotency key conflict, or a concurrent change (CONFLICT; retry)
       content:
         application/json:
           schema:
@@ -801,3 +1009,26 @@ components:
         application/json:
           schema:
             $ref: "#/components/schemas/ErrorResponse"
+    RefundReplayed:
+      description: The reference_id was already used; this is the original refund
+      headers:
+        X-Idempotent-Replay:
+          schema:
+            type: string
+            enum: ["true"]
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RefundResponse"
+    RefundDecided:
+      description: Refund created and decided by the gateway (status SUCCEEDED or FAILED)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RefundResponse"
+    RefundPending:
+      description: Refund created; the gateway's answer hasn't arrived yet (status PENDING)
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/RefundResponse"

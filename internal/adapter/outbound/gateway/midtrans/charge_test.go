@@ -117,8 +117,8 @@ func TestCreateTransaction_PerMethod(t *testing.T) {
 			want:       ports.NextAction{Type: ports.NextActionDisplayVA, VANumber: "8562000087926752", Bank: "permata"},
 		},
 		{
-			name:  "QRIS",
-			req:   func() ports.CreateTransactionRequest { return chargeReq(payment.MethodQRIS) },
+			name: "QRIS",
+			req:  func() ports.CreateTransactionRequest { return chargeReq(payment.MethodQRIS) },
 			reply: `{"status_code":"201","transaction_id":"tx-qr","transaction_status":"pending","acquirer":"gopay",
 				"qr_string":"00020101021226620014COM.GO-JEK.WWW","actions":[
 				{"name":"generate-qr-code","method":"GET","url":"https://api.sandbox.midtrans.com/v2/qris/tx-qr/qr-code"}]}`,
@@ -274,11 +274,19 @@ func TestCreateTransaction_SendsCustomExpiry(t *testing.T) {
 func TestCreateTransaction_InvalidInputNeverReachesMidtrans(t *testing.T) {
 	past := time.Now().Add(-time.Minute)
 	cases := map[string]ports.CreateTransactionRequest{
-		"VA without bank":       chargeReq(payment.MethodVirtualAccount),
-		"VA with Mandiri":       func() ports.CreateTransactionRequest { r := chargeReq(payment.MethodVirtualAccount); r.BankCode = "MANDIRI"; return r }(),
-		"card without token":    chargeReq(payment.MethodCard),
-		"ShopeePay w/o return":  chargeReq(payment.MethodShopeePay),
-		"expiry in the past":    func() ports.CreateTransactionRequest { r := chargeReq(payment.MethodQRIS); r.ExpiredAt = &past; return r }(),
+		"VA without bank": chargeReq(payment.MethodVirtualAccount),
+		"VA with Mandiri": func() ports.CreateTransactionRequest {
+			r := chargeReq(payment.MethodVirtualAccount)
+			r.BankCode = "MANDIRI"
+			return r
+		}(),
+		"card without token":   chargeReq(payment.MethodCard),
+		"ShopeePay w/o return": chargeReq(payment.MethodShopeePay),
+		"expiry in the past": func() ports.CreateTransactionRequest {
+			r := chargeReq(payment.MethodQRIS)
+			r.ExpiredAt = &past
+			return r
+		}(),
 		"method Midtrans lacks": chargeReq(payment.Method("OVO")),
 	}
 	for name, req := range cases {

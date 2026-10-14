@@ -7,8 +7,16 @@
 | `payments` | Core payment aggregate |
 | `payment_attempts` | Per-attempt audit trail (retry reconciliation) |
 | `payment_events` | Domain event store (audit log) |
-| `outbox` | Transactional outbox for RabbitMQ publishing (TD-02) |
-| `idempotency_keys` | Idempotency cache (TD-02) |
+| `outbox_events` | Transactional outbox for RabbitMQ publishing |
+| `idempotency_keys` | Idempotency cache (currently unused; idempotency lives in Redis) |
+| `refunds` | Refunds of a payment, saved together with it (part of the Payment aggregate) |
+
+## Optimistic Locking
+
+`payments.version` is bumped on every save, and a save only succeeds if the row still has
+the version it was loaded with. Otherwise the repository returns `CONFLICT` (HTTP 409) and
+the caller must reload and retry. This is what stops two concurrent refunds from exceeding
+the amount paid, and a webhook and a cancel from overwriting each other.
 
 ## Migration Convention
 

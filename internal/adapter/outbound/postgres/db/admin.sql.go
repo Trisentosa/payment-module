@@ -7,8 +7,10 @@ package db
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getOutboxStats = `-- name: GetOutboxStats :many
@@ -131,15 +133,29 @@ FROM refunds
 WHERE payment_id = $1 AND deleted_at IS NULL
 `
 
-func (q *Queries) GetRefundsByPayment(ctx context.Context, paymentID uuid.UUID) ([]Refund, error) {
+type GetRefundsByPaymentRow struct {
+	ID                     uuid.UUID
+	PaymentID              uuid.UUID
+	ReferenceID            string
+	GatewayRefundID        *string
+	Status                 string
+	Amount                 int64
+	Reason                 pgtype.Text
+	GatewayResponsePayload []byte
+	CreatedAt              pgtype.Timestamptz
+	UpdatedAt              pgtype.Timestamptz
+	DeletedAt              *time.Time
+}
+
+func (q *Queries) GetRefundsByPayment(ctx context.Context, paymentID uuid.UUID) ([]GetRefundsByPaymentRow, error) {
 	rows, err := q.db.Query(ctx, getRefundsByPayment, paymentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Refund
+	var items []GetRefundsByPaymentRow
 	for rows.Next() {
-		var i Refund
+		var i GetRefundsByPaymentRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.PaymentID,

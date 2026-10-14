@@ -32,6 +32,7 @@ var routingKey = map[string]string{
 	"PaymentExpired":   "payment.expired",
 	"RefundRequested":  "refund.requested",
 	"RefundCompleted":  "refund.completed",
+	"RefundFailed":     "refund.failed",
 }
 
 type Publisher struct {

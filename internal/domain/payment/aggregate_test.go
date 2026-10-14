@@ -102,7 +102,7 @@ func TestMarkPending_RejectsNonInitiated(t *testing.T) {
 func TestStatus_IsTerminal(t *testing.T) {
 	terminal := []payment.Status{
 		payment.StatusCompleted, payment.StatusFailed,
-		payment.StatusExpired, payment.StatusRefunded, payment.StatusRefundFailed,
+		payment.StatusExpired, payment.StatusPartiallyRefunded, payment.StatusRefunded,
 	}
 	for _, s := range terminal {
 		if !s.IsTerminal() {

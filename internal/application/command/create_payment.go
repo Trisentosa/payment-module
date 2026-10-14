@@ -100,20 +100,20 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 	log.Info("calling gateway", "gateway", cmd.GatewayType, "payment_id", p.ID)
 
 	gwResp, err := gw.CreateTransaction(ctx, ports.CreateTransactionRequest{
-		PaymentID:         p.ID.String(),
-		ReferenceID:       cmd.ReferenceID,
-		Amount:            cmd.Amount,
-		Currency:          cmd.Currency,
-		PaymentMethod:     method,
-		BankCode:          cmd.BankCode,
-		CardToken:         cmd.CardToken,
-		ReturnURL:         cmd.ReturnURL,
-		CustomerName:      cmd.CustomerName,
-		CustomerEmail:     cmd.CustomerEmail,
-		CustomerPhone:     cmd.CustomerPhone,
-		Description:       cmd.Description,
-		ExpiredAt:         cmd.ExpiredAt,
-		Metadata:          cmd.Metadata,
+		PaymentID:     p.ID.String(),
+		ReferenceID:   cmd.ReferenceID,
+		Amount:        cmd.Amount,
+		Currency:      cmd.Currency,
+		PaymentMethod: method,
+		BankCode:      cmd.BankCode,
+		CardToken:     cmd.CardToken,
+		ReturnURL:     cmd.ReturnURL,
+		CustomerName:  cmd.CustomerName,
+		CustomerEmail: cmd.CustomerEmail,
+		CustomerPhone: cmd.CustomerPhone,
+		Description:   cmd.Description,
+		ExpiredAt:     cmd.ExpiredAt,
+		Metadata:      cmd.Metadata,
 	})
 	if apperror.IsCode(err, apperror.CodeInvalidInput) {
 		// The gateway refused the request's contents before creating anything. Nothing is

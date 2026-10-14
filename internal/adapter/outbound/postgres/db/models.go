@@ -54,6 +54,7 @@ type Payment struct {
 	CreatedAt              pgtype.Timestamptz
 	UpdatedAt              pgtype.Timestamptz
 	DeletedAt              *time.Time
+	Version                int32
 }
 
 type PaymentAttempt struct {
@@ -94,4 +95,7 @@ type Refund struct {
 	CreatedAt              pgtype.Timestamptz
 	UpdatedAt              pgtype.Timestamptz
 	DeletedAt              *time.Time
+	FailureReason          pgtype.Text
+	RequestedBy            string
+	CompletedAt            *time.Time
 }

@@ -60,6 +60,19 @@ type MethodCapability struct {
 	PartialRefund bool
 }
 
+type RefundRequest struct {
+	GatewayTransactionID string
+	RefundKey            string // PayGate's refund ID; the gateway uses it to deduplicate retries
+	Amount               int64
+	Reason               string
+}
+
+type RefundResult struct {
+	Accepted        bool
+	GatewayRefundID string
+	DeclineReason   string // set when Accepted is false
+}
+
 // TransactionStatus is a gateway-neutral view of a transaction's state.
 // Each adapter maps its own status vocabulary onto these values.
 type TransactionStatus string
@@ -79,6 +92,14 @@ type WebhookNotification struct {
 	GatewayTransactionID string
 	Status               TransactionStatus
 	GatewayStatus        string // the gateway's own status string, kept for logs and failure codes
+	// Refunds lists refunds the gateway reports as done on this transaction.
+	Refunds []RefundNotification
+}
+
+type RefundNotification struct {
+	RefundKey       string // PayGate's refund ID, when the refund was requested through PayGate
+	GatewayRefundID string
+	Amount          int64
 }
 
 type GatewayPort interface {
@@ -87,7 +108,10 @@ type GatewayPort interface {
 	CreateTransaction(ctx context.Context, req CreateTransactionRequest) (*GatewayResponse, error)
 	GetTransactionStatus(ctx context.Context, gatewayTxID string) (string, error)
 	CancelTransaction(ctx context.Context, gatewayTxID string) error
-	CreateRefund(ctx context.Context, gatewayTxID string, amount int64, reason string) (string, error)
+	// CreateRefund asks the gateway to refund a settled transaction. A nil error means the
+	// gateway answered: Accepted says whether it refunded. A non-nil error means the outcome
+	// is unknown (timeout, gateway outage); retrying with the same RefundKey is safe.
+	CreateRefund(ctx context.Context, req RefundRequest) (*RefundResult, error)
 	// ParseWebhook authenticates a notification and translates it. headers carries the
 	// HTTP request headers for gateways that sign in a header rather than the body.
 	// An unauthentic or malformed notification returns an INVALID_INPUT error.

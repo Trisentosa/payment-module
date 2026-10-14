@@ -38,7 +38,7 @@ func (h *ForceExpireHandler) Handle(ctx context.Context, cmd ForceExpireCommand)
 		return err
 	}
 
-	_ = h.cache.Delete(ctx, "payment:"+p.ID.String())
+	ports.DropCachedPayment(ctx, h.cache, p)
 
 	log.Info("payment force-expired by admin", "payment_id", p.ID)
 	return nil

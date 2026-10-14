@@ -98,6 +98,7 @@ func main() {
 	processCallbackHandler := command.NewProcessCallbackHandler(paymentRepo, gatewayFactory, redisClient)
 	cancelPaymentHandler := command.NewCancelPaymentHandler(paymentRepo, gatewayFactory)
 	forceExpireHandler := command.NewForceExpireHandler(paymentRepo, redisClient)
+	refundPaymentHandler := command.NewRefundPaymentHandler(paymentRepo, gatewayFactory, redisClient)
 
 	// Query handlers
 	getPaymentHandler := query.NewGetPaymentHandler(paymentRepo, redisClient, redisAdapter.TTLForStatus)
@@ -108,6 +109,7 @@ func main() {
 	getEventsHandler := query.NewGetEventsHandler(adminRepo)
 	getRefundsHandler := query.NewGetRefundsHandler(adminRepo)
 	outboxStatsHandler := query.NewGetOutboxStatsHandler(adminRepo)
+	listRefundsHandler := query.NewListRefundsHandler(paymentRepo)
 
 	// Idempotency
 	idemService := httpMiddleware.NewIdempotencyService(redisClient, 24*time.Hour)
@@ -122,6 +124,7 @@ func main() {
 		listPaymentsHandler,
 	)
 	webhookHandler := httpAdapter.NewWebhookHandler(processCallbackHandler)
+	refundHandler := httpAdapter.NewRefundHandler(refundPaymentHandler, listRefundsHandler)
 	adminHandler := httpAdapter.NewAdminHandler(
 		adminListHandler,
 		getAttemptsHandler,
@@ -150,11 +153,13 @@ func main() {
 	// Write
 	mux.HandleFunc("POST /payments", paymentHandler.CreatePayment)
 	mux.HandleFunc("DELETE /payments/{id}", paymentHandler.CancelPayment)
+	mux.HandleFunc("POST /payments/{id}/refunds", refundHandler.CreateRefund)
 
 	// Read
 	mux.HandleFunc("GET /payments", paymentHandler.ListPayments)
 	mux.HandleFunc("GET /payments/{id}", paymentHandler.GetPayment)
 	mux.HandleFunc("GET /payments/ref/{reference_id}", paymentHandler.GetPaymentByRef)
+	mux.HandleFunc("GET /payments/{id}/refunds", refundHandler.ListRefunds)
 
 	// Webhooks
 	mux.HandleFunc("POST /webhooks/midtrans", webhookHandler.HandleMidtrans)
@@ -166,6 +171,7 @@ func main() {
 	adminMux.HandleFunc("GET /api/v1/admin/payments/{id}/attempts", adminHandler.ListPaymentAttempts)
 	adminMux.HandleFunc("GET /api/v1/admin/payments/{id}/events", adminHandler.ListPaymentEvents)
 	adminMux.HandleFunc("GET /api/v1/admin/payments/{id}/refunds", adminHandler.ListRefunds)
+	adminMux.HandleFunc("POST /api/v1/admin/payments/{id}/refunds", refundHandler.AdminCreateRefund)
 	adminMux.HandleFunc("POST /api/v1/admin/payments/{id}/expire", adminHandler.ForceExpire)
 	adminMux.HandleFunc("GET /api/v1/admin/outbox/stats", adminHandler.OutboxStats)
 

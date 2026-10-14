@@ -20,7 +20,8 @@ make openapi
 ```
 
 This runs `oapi-codegen` (registered as a `go tool` in `go.mod`) and
-overwrites `openapi_gen.go`. Commit both files together so the spec and the
+overwrites `openapi_gen.go`. Run it from the repo root: the `output` path in
+`api/oapi-codegen.yaml` is resolved against the working directory. Commit both files together so the spec and the
 generated code stay in sync.
 
 ## Browsing the Spec at Runtime
@@ -83,6 +84,7 @@ Only **public API** endpoints belong in the spec:
 |----------|----------|--------|
 | `POST /payments` | Yes | Caller-facing |
 | `DELETE /payments/{id}` | Yes | Caller-facing |
+| `POST /payments/{id}/refunds`, `GET /payments/{id}/refunds` | Yes | Caller-facing |
 | `POST /webhooks/midtrans` | **No** | Gateway-to-service callback; Midtrans owns the shape |
 | `GET /healthz`, `GET /readyz` | **No** | Infrastructure probes |
 | `GET /openapi.yaml` | **No** | Meta-endpoint |

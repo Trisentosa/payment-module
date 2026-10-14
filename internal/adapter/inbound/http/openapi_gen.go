@@ -30,16 +30,15 @@ func (e AdminForceExpireResponseStatus) Valid() bool {
 
 // Defines values for AdminPaymentStatus.
 const (
-	AdminPaymentStatusCANCELLED       AdminPaymentStatus = "CANCELLED"
-	AdminPaymentStatusCOMPLETED       AdminPaymentStatus = "COMPLETED"
-	AdminPaymentStatusEXPIRED         AdminPaymentStatus = "EXPIRED"
-	AdminPaymentStatusFAILED          AdminPaymentStatus = "FAILED"
-	AdminPaymentStatusINITIATED       AdminPaymentStatus = "INITIATED"
-	AdminPaymentStatusPENDING         AdminPaymentStatus = "PENDING"
-	AdminPaymentStatusPROCESSING      AdminPaymentStatus = "PROCESSING"
-	AdminPaymentStatusREFUNDED        AdminPaymentStatus = "REFUNDED"
-	AdminPaymentStatusREFUNDFAILED    AdminPaymentStatus = "REFUND_FAILED"
-	AdminPaymentStatusREFUNDREQUESTED AdminPaymentStatus = "REFUND_REQUESTED"
+	AdminPaymentStatusCANCELLED         AdminPaymentStatus = "CANCELLED"
+	AdminPaymentStatusCOMPLETED         AdminPaymentStatus = "COMPLETED"
+	AdminPaymentStatusEXPIRED           AdminPaymentStatus = "EXPIRED"
+	AdminPaymentStatusFAILED            AdminPaymentStatus = "FAILED"
+	AdminPaymentStatusINITIATED         AdminPaymentStatus = "INITIATED"
+	AdminPaymentStatusPARTIALLYREFUNDED AdminPaymentStatus = "PARTIALLY_REFUNDED"
+	AdminPaymentStatusPENDING           AdminPaymentStatus = "PENDING"
+	AdminPaymentStatusPROCESSING        AdminPaymentStatus = "PROCESSING"
+	AdminPaymentStatusREFUNDED          AdminPaymentStatus = "REFUNDED"
 )
 
 // Valid indicates whether the value is a known member of the AdminPaymentStatus enum.
@@ -55,15 +54,13 @@ func (e AdminPaymentStatus) Valid() bool {
 		return true
 	case AdminPaymentStatusINITIATED:
 		return true
+	case AdminPaymentStatusPARTIALLYREFUNDED:
+		return true
 	case AdminPaymentStatusPENDING:
 		return true
 	case AdminPaymentStatusPROCESSING:
 		return true
 	case AdminPaymentStatusREFUNDED:
-		return true
-	case AdminPaymentStatusREFUNDFAILED:
-		return true
-	case AdminPaymentStatusREFUNDREQUESTED:
 		return true
 	default:
 		return false
@@ -129,16 +126,15 @@ func (e CreatePaymentRequestPaymentMethodType) Valid() bool {
 
 // Defines values for CreatePaymentResponseStatus.
 const (
-	CreatePaymentResponseStatusCANCELLED       CreatePaymentResponseStatus = "CANCELLED"
-	CreatePaymentResponseStatusCOMPLETED       CreatePaymentResponseStatus = "COMPLETED"
-	CreatePaymentResponseStatusEXPIRED         CreatePaymentResponseStatus = "EXPIRED"
-	CreatePaymentResponseStatusFAILED          CreatePaymentResponseStatus = "FAILED"
-	CreatePaymentResponseStatusINITIATED       CreatePaymentResponseStatus = "INITIATED"
-	CreatePaymentResponseStatusPENDING         CreatePaymentResponseStatus = "PENDING"
-	CreatePaymentResponseStatusPROCESSING      CreatePaymentResponseStatus = "PROCESSING"
-	CreatePaymentResponseStatusREFUNDED        CreatePaymentResponseStatus = "REFUNDED"
-	CreatePaymentResponseStatusREFUNDFAILED    CreatePaymentResponseStatus = "REFUND_FAILED"
-	CreatePaymentResponseStatusREFUNDREQUESTED CreatePaymentResponseStatus = "REFUND_REQUESTED"
+	CreatePaymentResponseStatusCANCELLED         CreatePaymentResponseStatus = "CANCELLED"
+	CreatePaymentResponseStatusCOMPLETED         CreatePaymentResponseStatus = "COMPLETED"
+	CreatePaymentResponseStatusEXPIRED           CreatePaymentResponseStatus = "EXPIRED"
+	CreatePaymentResponseStatusFAILED            CreatePaymentResponseStatus = "FAILED"
+	CreatePaymentResponseStatusINITIATED         CreatePaymentResponseStatus = "INITIATED"
+	CreatePaymentResponseStatusPARTIALLYREFUNDED CreatePaymentResponseStatus = "PARTIALLY_REFUNDED"
+	CreatePaymentResponseStatusPENDING           CreatePaymentResponseStatus = "PENDING"
+	CreatePaymentResponseStatusPROCESSING        CreatePaymentResponseStatus = "PROCESSING"
+	CreatePaymentResponseStatusREFUNDED          CreatePaymentResponseStatus = "REFUNDED"
 )
 
 // Valid indicates whether the value is a known member of the CreatePaymentResponseStatus enum.
@@ -154,15 +150,13 @@ func (e CreatePaymentResponseStatus) Valid() bool {
 		return true
 	case CreatePaymentResponseStatusINITIATED:
 		return true
+	case CreatePaymentResponseStatusPARTIALLYREFUNDED:
+		return true
 	case CreatePaymentResponseStatusPENDING:
 		return true
 	case CreatePaymentResponseStatusPROCESSING:
 		return true
 	case CreatePaymentResponseStatusREFUNDED:
-		return true
-	case CreatePaymentResponseStatusREFUNDFAILED:
-		return true
-	case CreatePaymentResponseStatusREFUNDREQUESTED:
 		return true
 	default:
 		return false
@@ -220,6 +214,27 @@ func (e NextActionType) Valid() bool {
 	case NONE:
 		return true
 	case REDIRECT:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for RefundStatus.
+const (
+	FAILED    RefundStatus = "FAILED"
+	PENDING   RefundStatus = "PENDING"
+	SUCCEEDED RefundStatus = "SUCCEEDED"
+)
+
+// Valid indicates whether the value is a known member of the RefundStatus enum.
+func (e RefundStatus) Valid() bool {
+	switch e {
+	case FAILED:
+		return true
+	case PENDING:
+		return true
+	case SUCCEEDED:
 		return true
 	default:
 		return false
@@ -414,6 +429,16 @@ type CreatePaymentResponse struct {
 // CreatePaymentResponseStatus defines model for CreatePaymentResponse.Status.
 type CreatePaymentResponseStatus string
 
+// CreateRefundRequest defines model for CreateRefundRequest.
+type CreateRefundRequest struct {
+	// Amount Amount to refund. Omit to refund everything still refundable.
+	Amount *int64  `json:"amount,omitempty"`
+	Reason *string `json:"reason,omitempty"`
+
+	// ReferenceID Caller-assigned identifier for this refund, unique per payment. Retries must reuse it.
+	ReferenceID string `json:"reference_id"`
+}
+
 // ErrorResponse All error responses share this shape. The `code` field is a machine-readable
 // constant that maps to `apperror.Code` on the server.
 type ErrorResponse struct {
@@ -452,8 +477,63 @@ type NextAction struct {
 // NONE: nothing to do; the payment already finished (see status).
 type NextActionType string
 
+// Refund defines model for Refund.
+type Refund struct {
+	Amount          int64      `json:"amount"`
+	CompletedAt     *time.Time `json:"completed_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	FailureReason   *string    `json:"failure_reason,omitempty"`
+	GatewayRefundID *string    `json:"gateway_refund_id,omitempty"`
+	Reason          *string    `json:"reason,omitempty"`
+	ReferenceID     string     `json:"reference_id"`
+	RefundID        string     `json:"refund_id"`
+
+	// Status PENDING: waiting for the gateway; the amount is reserved.
+	// SUCCEEDED: the gateway refunded it.
+	// FAILED: the gateway declined it (see failure_reason); the amount is released.
+	Status RefundStatus `json:"status"`
+}
+
+// RefundStatus PENDING: waiting for the gateway; the amount is reserved.
+// SUCCEEDED: the gateway refunded it.
+// FAILED: the gateway declined it (see failure_reason); the amount is released.
+type RefundStatus string
+
+// RefundListResponse defines model for RefundListResponse.
+type RefundListResponse struct {
+	Data []Refund `json:"data"`
+
+	// Payment The refunded payment's state after the operation
+	Payment RefundPaymentSummary `json:"payment"`
+}
+
+// RefundPaymentSummary The refunded payment's state after the operation
+type RefundPaymentSummary struct {
+	Amount    int64  `json:"amount"`
+	PaymentID string `json:"payment_id"`
+
+	// RefundableAmount What can still be refunded (amount minus SUCCEEDED and PENDING refunds)
+	RefundableAmount int64 `json:"refundable_amount"`
+
+	// RefundedAmount Total of SUCCEEDED refunds
+	RefundedAmount int64 `json:"refunded_amount"`
+
+	// Status Payment status, e.g. COMPLETED, PARTIALLY_REFUNDED or REFUNDED
+	Status string `json:"status"`
+}
+
+// RefundResponse defines model for RefundResponse.
+type RefundResponse struct {
+	// Payment The refunded payment's state after the operation
+	Payment RefundPaymentSummary `json:"payment"`
+	Refund  Refund               `json:"refund"`
+}
+
 // AdminPaymentID defines model for AdminPaymentID.
 type AdminPaymentID = openapi_types.UUID
+
+// PaymentID defines model for PaymentID.
+type PaymentID = openapi_types.UUID
 
 // XServiceName defines model for XServiceName.
 type XServiceName = string
@@ -473,6 +553,15 @@ type InternalError = ErrorResponse
 // NotFound All error responses share this shape. The `code` field is a machine-readable
 // constant that maps to `apperror.Code` on the server.
 type NotFound = ErrorResponse
+
+// RefundDecided defines model for RefundDecided.
+type RefundDecided = RefundResponse
+
+// RefundPending defines model for RefundPending.
+type RefundPending = RefundResponse
+
+// RefundReplayed defines model for RefundReplayed.
+type RefundReplayed = RefundResponse
 
 // Unauthorized All error responses share this shape. The `code` field is a machine-readable
 // constant that maps to `apperror.Code` on the server.
@@ -515,5 +604,25 @@ type CancelPaymentParams struct {
 	XServiceName XServiceName `json:"X-Service-Name"`
 }
 
+// ListRefundsParams defines parameters for ListRefunds.
+type ListRefundsParams struct {
+	// XServiceName Identifier of the calling service. Used for idempotency key scoping
+	// and audit logging. Must be stable across retries.
+	XServiceName XServiceName `json:"X-Service-Name"`
+}
+
+// CreateRefundParams defines parameters for CreateRefund.
+type CreateRefundParams struct {
+	// XServiceName Identifier of the calling service. Used for idempotency key scoping
+	// and audit logging. Must be stable across retries.
+	XServiceName XServiceName `json:"X-Service-Name"`
+}
+
+// AdminCreateRefundJSONRequestBody defines body for AdminCreateRefund for application/json ContentType.
+type AdminCreateRefundJSONRequestBody = CreateRefundRequest
+
 // CreatePaymentJSONRequestBody defines body for CreatePayment for application/json ContentType.
 type CreatePaymentJSONRequestBody = CreatePaymentRequest
+
+// CreateRefundJSONRequestBody defines body for CreateRefund for application/json ContentType.
+type CreateRefundJSONRequestBody = CreateRefundRequest

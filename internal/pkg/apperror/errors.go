@@ -15,6 +15,7 @@ const (
 	CodeGatewayError        Code = "GATEWAY_ERROR"
 	CodeInternalError       Code = "INTERNAL_ERROR"
 	CodeIdempotencyConflict Code = "IDEMPOTENCY_CONFLICT"
+	CodeConflict            Code = "CONFLICT"
 )
 
 type AppError struct {
@@ -36,6 +37,7 @@ func NotFound(msg string) *AppError      { return &AppError{Code: CodeNotFound, 
 func AlreadyExists(msg string) *AppError { return &AppError{Code: CodeAlreadyExists, Message: msg} }
 func InvalidInput(msg string) *AppError  { return &AppError{Code: CodeInvalidInput, Message: msg} }
 func InvalidState(msg string) *AppError  { return &AppError{Code: CodeInvalidState, Message: msg} }
+func Conflict(msg string) *AppError      { return &AppError{Code: CodeConflict, Message: msg} }
 func IdempotencyConflict(msg string) *AppError {
 	return &AppError{Code: CodeIdempotencyConflict, Message: msg}
 }

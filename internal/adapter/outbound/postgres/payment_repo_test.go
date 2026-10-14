@@ -5,23 +5,42 @@ package postgres_test
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5/pgxpool"
 	pgxAdapter "github.com/Trisentosa/payment-module/internal/adapter/outbound/postgres"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
 	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
 
+// setupTestDB returns a migrated, empty database. It starts a Postgres container, unless
+// PAYGATE_TEST_DATABASE_URL points at an existing database, which is then wiped per test
+// (for machines without Docker). Never point it at a database you care about.
 func setupTestDB(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	ctx := context.Background()
+
+	if url := os.Getenv("PAYGATE_TEST_DATABASE_URL"); url != "" {
+		pool, err := pgxpool.New(ctx, url)
+		if err != nil {
+			t.Fatalf("pgxpool.New: %v", err)
+		}
+		t.Cleanup(pool.Close)
+		if _, err := pool.Exec(ctx, `DROP SCHEMA public CASCADE; CREATE SCHEMA public`); err != nil {
+			t.Fatalf("reset schema: %v", err)
+		}
+		runMigrations(t, pool)
+		return pool
+	}
 
 	pgc, err := tcpostgres.Run(ctx, "postgres:16-alpine",
 		tcpostgres.WithDatabase("paygate_test"),
@@ -53,60 +72,24 @@ func setupTestDB(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// runMigrations applies the real migration files in order, so the test schema can't
+// drift from production.
 func runMigrations(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()
 	ctx := context.Background()
 
-	migrations := []string{
-		`CREATE TABLE IF NOT EXISTS payments (
-			id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			reference_id             VARCHAR(255) NOT NULL,
-			caller_service           VARCHAR(100) NOT NULL,
-			gateway_type             VARCHAR(50)  NOT NULL,
-			gateway_transaction_id   VARCHAR(255),
-			status                   VARCHAR(50)  NOT NULL DEFAULT 'INITIATED',
-			amount                   BIGINT       NOT NULL CHECK (amount > 0),
-			currency                 VARCHAR(10)  NOT NULL DEFAULT 'IDR',
-			payment_method_type      VARCHAR(50),
-			customer_info            JSONB        NOT NULL DEFAULT '{}',
-			metadata                 JSONB                 DEFAULT '{}',
-			gateway_request_payload  JSONB,
-			gateway_response_payload JSONB,
-			description              TEXT,
-			expired_at               TIMESTAMPTZ,
-			paid_at                  TIMESTAMPTZ,
-			created_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-			updated_at               TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-			deleted_at               TIMESTAMPTZ,
-			CONSTRAINT uq_payments_reference UNIQUE (reference_id, caller_service)
-		)`,
-		`CREATE TABLE IF NOT EXISTS payment_events (
-			id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-			aggregate_id    UUID         NOT NULL,
-			aggregate_type  VARCHAR(50)  NOT NULL,
-			event_type      VARCHAR(100) NOT NULL,
-			sequence_number INT          NOT NULL,
-			payload         JSONB        NOT NULL,
-			created_by      VARCHAR(100) NOT NULL DEFAULT 'system',
-			created_at      TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-		)`,
-		`CREATE TABLE IF NOT EXISTS outbox_events (
-			id           UUID         PRIMARY KEY DEFAULT gen_random_uuid(),
-			aggregate_id UUID         NOT NULL,
-			event_type   VARCHAR(100) NOT NULL,
-			payload      JSONB        NOT NULL,
-			status       VARCHAR(20)  NOT NULL DEFAULT 'PENDING',
-			retry_count  INT          NOT NULL DEFAULT 0,
-			last_error   TEXT,
-			scheduled_at TIMESTAMPTZ  NOT NULL DEFAULT NOW(),
-			published_at TIMESTAMPTZ,
-			created_at   TIMESTAMPTZ  NOT NULL DEFAULT NOW()
-		)`,
+	files, err := filepath.Glob("../../../../migrations/*.up.sql")
+	if err != nil || len(files) == 0 {
+		t.Fatalf("find migrations: %v (found %d)", err, len(files))
 	}
-
-	for _, sql := range migrations {
-		if _, err := pool.Exec(ctx, sql); err != nil {
-			t.Fatalf("migration failed: %v", err)
+	sort.Strings(files)
+	for _, f := range files {
+		sql, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatalf("read %s: %v", f, err)
+		}
+		if _, err := pool.Exec(ctx, string(sql)); err != nil {
+			t.Fatalf("apply %s: %v", filepath.Base(f), err)
 		}
 	}
 }
@@ -243,5 +226,123 @@ func TestPaymentRepo_Save_DuplicateReference(t *testing.T) {
 	}
 	if events != 0 || outbox != 0 {
 		t.Errorf("phantom rows for rejected payment: payment_events=%d outbox_events=%d", events, outbox)
+	}
+}
+
+func completedTestPayment(t *testing.T, ctx context.Context, repo *pgxAdapter.PaymentRepo) *payment.Payment {
+	t.Helper()
+	p := newTestPayment(fmt.Sprintf("REF-%s", uuid.New()))
+	if err := repo.Save(ctx, p); err != nil {
+		t.Fatalf("Save new: %v", err)
+	}
+	if err := p.MarkPending("gw-"+p.ID.String(), nil); err != nil {
+		t.Fatalf("MarkPending: %v", err)
+	}
+	if err := p.MarkCompleted(time.Now()); err != nil {
+		t.Fatalf("MarkCompleted: %v", err)
+	}
+	if err := repo.Save(ctx, p); err != nil {
+		t.Fatalf("Save completed: %v", err)
+	}
+	return p
+}
+
+func TestPaymentRepo_RefundsRoundTrip(t *testing.T) {
+	pool := setupTestDB(t)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
+	ctx := context.Background()
+
+	p := completedTestPayment(t, ctx, repo)
+	r, err := p.RequestRefund("rf-1", 25000, "damaged", "order-service")
+	if err != nil {
+		t.Fatalf("RequestRefund: %v", err)
+	}
+	if err := repo.Save(ctx, p); err != nil {
+		t.Fatalf("Save pending refund: %v", err)
+	}
+	if err := p.CompleteRefund(r.ID, "7"); err != nil {
+		t.Fatalf("CompleteRefund: %v", err)
+	}
+	if err := repo.Save(ctx, p); err != nil {
+		t.Fatalf("Save completed refund: %v", err)
+	}
+
+	found, err := repo.FindByID(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if found.Status != payment.StatusPartiallyRefunded || len(found.Refunds) != 1 {
+		t.Fatalf("found: status=%s refunds=%d", found.Status, len(found.Refunds))
+	}
+	got := found.Refunds[0]
+	if got.ID != r.ID || got.Status != payment.RefundStatusSucceeded || got.GatewayRefundID != "7" ||
+		got.Amount != 25000 || got.RequestedBy != "order-service" || got.CompletedAt == nil {
+		t.Errorf("refund round trip: %+v", got)
+	}
+
+	var outbox int
+	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM outbox_events WHERE aggregate_id = $1 AND event_type LIKE 'Refund%'`, p.ID).Scan(&outbox); err != nil {
+		t.Fatalf("count outbox: %v", err)
+	}
+	if outbox != 2 {
+		t.Errorf("refund outbox rows: %d, want 2 (requested, completed)", outbox)
+	}
+}
+
+func TestPaymentRepo_StaleSaveConflicts(t *testing.T) {
+	pool := setupTestDB(t)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
+	ctx := context.Background()
+
+	p := completedTestPayment(t, ctx, repo) // 75000 IDR
+	a, _ := repo.FindByID(ctx, p.ID)
+	b, _ := repo.FindByID(ctx, p.ID)
+
+	if _, err := a.RequestRefund("rf-a", 50000, "", "svc"); err != nil {
+		t.Fatalf("RequestRefund a: %v", err)
+	}
+	if err := repo.Save(ctx, a); err != nil {
+		t.Fatalf("Save a: %v", err)
+	}
+
+	// b was loaded before a's refund, so it still sees 75000 as refundable. Together the two
+	// refunds would exceed what was paid; the version check must stop b.
+	if _, err := b.RequestRefund("rf-b", 40000, "", "svc"); err != nil {
+		t.Fatalf("RequestRefund b: %v", err)
+	}
+	if err := repo.Save(ctx, b); !apperror.IsCode(err, apperror.CodeConflict) {
+		t.Fatalf("stale save: expected CONFLICT, got %v", err)
+	}
+
+	found, err := repo.FindByID(ctx, p.ID)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if len(found.Refunds) != 1 || found.RefundableAmount() != 25000 {
+		t.Errorf("after conflict: refunds=%d refundable=%d, want only a's refund (25000 left)",
+			len(found.Refunds), found.RefundableAmount())
+	}
+}
+
+func TestPaymentRepo_ListPaginated(t *testing.T) {
+	pool := setupTestDB(t)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		if err := repo.Save(ctx, newTestPayment(fmt.Sprintf("LIST-%d-%s", i, uuid.New()))); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+	}
+
+	got, err := repo.ListPaginated(ctx, payment.ListFilter{CallerService: "order-service", ReferenceID: "LIST-", Limit: 2})
+	if err != nil {
+		t.Fatalf("ListPaginated: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d payments, want 2 (limit)", len(got))
+	}
+	if got[0].Version != 1 || got[0].CreatedAt.Before(got[1].CreatedAt) {
+		t.Errorf("first row: version=%d, order newest-first? %v >= %v", got[0].Version, got[0].CreatedAt, got[1].CreatedAt)
 	}
 }

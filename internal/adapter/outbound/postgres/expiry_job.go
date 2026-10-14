@@ -73,6 +73,6 @@ func (j *ExpiryJob) expireOne(ctx context.Context, p *payment.Payment) error {
 		return err
 	}
 
-	_ = j.cache.Delete(ctx, "payment:"+p.ID.String())
+	ports.DropCachedPayment(ctx, j.cache, p)
 	return nil
 }

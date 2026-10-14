@@ -18,12 +18,12 @@ import (
 )
 
 type PaymentHandler struct {
-	createHandler  *command.CreatePaymentHandler
-	cancelHandler  *command.CancelPaymentHandler
-	idem           *middleware.IdempotencyService
-	getHandler     *query.GetPaymentHandler
+	createHandler   *command.CreatePaymentHandler
+	cancelHandler   *command.CancelPaymentHandler
+	idem            *middleware.IdempotencyService
+	getHandler      *query.GetPaymentHandler
 	getByRefHandler *query.GetByRefHandler
-	listHandler    *query.ListPaymentsHandler
+	listHandler     *query.ListPaymentsHandler
 }
 
 func NewPaymentHandler(

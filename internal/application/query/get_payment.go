@@ -43,7 +43,7 @@ func NewGetPaymentHandler(repo payment.Repository, cache ports.CachePort, ttlFn 
 }
 
 func (h *GetPaymentHandler) Handle(ctx context.Context, q GetPaymentQuery) (*PaymentDTO, error) {
-	cacheKey := "payment:" + q.ID.String()
+	cacheKey := ports.PaymentCacheKey(q.ID.String())
 
 	raw, err := h.cache.Get(ctx, cacheKey)
 	if err == nil {
@@ -93,4 +93,3 @@ func toDTO(p *payment.Payment) *PaymentDTO {
 		UpdatedAt:            p.UpdatedAt,
 	}
 }
-

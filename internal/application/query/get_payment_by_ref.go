@@ -33,7 +33,7 @@ func (h *GetByRefHandler) Handle(ctx context.Context, q GetByRefQuery) (*Payment
 	}
 
 	// Check the reference → UUID cache first.
-	refKey := "reference:" + q.CallerService + ":" + q.ReferenceID
+	refKey := ports.ReferenceCacheKey(q.CallerService, q.ReferenceID)
 	if cached, err := h.cache.Get(ctx, refKey); err == nil {
 		var dto PaymentDTO
 		if jsonErr := json.Unmarshal([]byte(cached), &dto); jsonErr == nil {

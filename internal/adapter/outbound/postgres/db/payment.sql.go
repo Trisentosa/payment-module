@@ -18,7 +18,7 @@ const getExpiredPayments = `-- name: GetExpiredPayments :many
 SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
        status, amount, currency, payment_method_type,
        customer_info, metadata, gateway_request_payload, gateway_response_payload,
-       description, expired_at, paid_at, created_at, updated_at, deleted_at
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 FROM payments
 WHERE status IN ('PENDING', 'INITIATED')
   AND expired_at < NOW()
@@ -55,6 +55,7 @@ func (q *Queries) GetExpiredPayments(ctx context.Context, limit int32) ([]Paymen
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.DeletedAt,
+			&i.Version,
 		); err != nil {
 			return nil, err
 		}
@@ -70,7 +71,7 @@ const getPaymentByGatewayTransactionID = `-- name: GetPaymentByGatewayTransactio
 SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
        status, amount, currency, payment_method_type,
        customer_info, metadata, gateway_request_payload, gateway_response_payload,
-       description, expired_at, paid_at, created_at, updated_at, deleted_at
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 FROM payments
 WHERE gateway_transaction_id = $1 AND deleted_at IS NULL
 `
@@ -98,6 +99,7 @@ func (q *Queries) GetPaymentByGatewayTransactionID(ctx context.Context, gatewayT
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Version,
 	)
 	return i, err
 }
@@ -106,7 +108,7 @@ const getPaymentByID = `-- name: GetPaymentByID :one
 SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
        status, amount, currency, payment_method_type,
        customer_info, metadata, gateway_request_payload, gateway_response_payload,
-       description, expired_at, paid_at, created_at, updated_at, deleted_at
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 FROM payments
 WHERE id = $1 AND deleted_at IS NULL
 `
@@ -134,6 +136,7 @@ func (q *Queries) GetPaymentByID(ctx context.Context, id uuid.UUID) (Payment, er
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Version,
 	)
 	return i, err
 }
@@ -142,7 +145,7 @@ const getPaymentByReference = `-- name: GetPaymentByReference :one
 SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
        status, amount, currency, payment_method_type,
        customer_info, metadata, gateway_request_payload, gateway_response_payload,
-       description, expired_at, paid_at, created_at, updated_at, deleted_at
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 FROM payments
 WHERE reference_id = $1 AND caller_service = $2 AND deleted_at IS NULL
 `
@@ -175,6 +178,7 @@ func (q *Queries) GetPaymentByReference(ctx context.Context, arg GetPaymentByRef
 		&i.CreatedAt,
 		&i.UpdatedAt,
 		&i.DeletedAt,
+		&i.Version,
 	)
 	return i, err
 }
@@ -238,14 +242,15 @@ func (q *Queries) InsertPayment(ctx context.Context, arg InsertPaymentParams) (i
 	return result.RowsAffected(), nil
 }
 
-const updatePaymentFull = `-- name: UpdatePaymentFull :exec
+const updatePaymentFull = `-- name: UpdatePaymentFull :execrows
 UPDATE payments
 SET gateway_transaction_id   = $2,
     status                   = $3,
     gateway_response_payload = $4,
     paid_at                  = $5,
-    updated_at               = $6
-WHERE id = $1
+    updated_at               = $6,
+    version                  = version + 1
+WHERE id = $1 AND version = $7
 `
 
 type UpdatePaymentFullParams struct {
@@ -255,18 +260,25 @@ type UpdatePaymentFullParams struct {
 	GatewayResponsePayload []byte
 	PaidAt                 *time.Time
 	UpdatedAt              pgtype.Timestamptz
+	Version                int32
 }
 
-func (q *Queries) UpdatePaymentFull(ctx context.Context, arg UpdatePaymentFullParams) error {
-	_, err := q.db.Exec(ctx, updatePaymentFull,
+// Succeeds only if the row still has the version the caller loaded; 0 rows means a
+// concurrent write won and the caller must reload.
+func (q *Queries) UpdatePaymentFull(ctx context.Context, arg UpdatePaymentFullParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updatePaymentFull,
 		arg.ID,
 		arg.GatewayTransactionID,
 		arg.Status,
 		arg.GatewayResponsePayload,
 		arg.PaidAt,
 		arg.UpdatedAt,
+		arg.Version,
 	)
-	return err
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updatePaymentStatus = `-- name: UpdatePaymentStatus :exec

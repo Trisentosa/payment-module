@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,6 +46,43 @@ type notification struct {
 	SignatureKey      string `json:"signature_key"`
 	TransactionStatus string `json:"transaction_status"`
 	FraudStatus       string `json:"fraud_status"`
+	// Refunds is present on refund / partial_refund notifications, one entry per refund.
+	Refunds []refundEntry `json:"refunds"`
+}
+
+type refundEntry struct {
+	RefundChargebackID flexString `json:"refund_chargeback_id"`
+	RefundAmount       flexString `json:"refund_amount"`
+	RefundKey          string     `json:"refund_key"`
+}
+
+// flexString accepts a JSON string or number. Midtrans documents refund_chargeback_id as a
+// string but sends a number, and sends amounts as decimal strings ("5000.00").
+type flexString string
+
+func (f *flexString) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		return nil
+	}
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*f = flexString(s)
+		return nil
+	}
+	*f = flexString(b)
+	return nil
+}
+
+// amount parses a Midtrans amount such as "5000.00" into whole currency units.
+func (f flexString) amount() int64 {
+	v, err := strconv.ParseFloat(string(f), 64)
+	if err != nil {
+		return 0
+	}
+	return int64(math.Round(v))
 }
 
 // ParseWebhook verifies Midtrans's body signature,
@@ -69,11 +107,21 @@ func (a *Adapter) ParseWebhook(payload []byte, _ map[string][]string) (*ports.We
 		return nil, apperror.InvalidInput("webhook missing transaction_id")
 	}
 
+	refunds := make([]ports.RefundNotification, 0, len(n.Refunds))
+	for _, r := range n.Refunds {
+		refunds = append(refunds, ports.RefundNotification{
+			RefundKey:       r.RefundKey,
+			GatewayRefundID: string(r.RefundChargebackID),
+			Amount:          r.RefundAmount.amount(),
+		})
+	}
+
 	return &ports.WebhookNotification{
 		PaymentID:            n.OrderID,
 		GatewayTransactionID: n.TransactionID,
 		Status:               mapTransactionStatus(n.TransactionStatus, n.FraudStatus),
 		GatewayStatus:        n.TransactionStatus,
+		Refunds:              refunds,
 	}, nil
 }
 
@@ -117,16 +165,33 @@ func (a *Adapter) GetTransactionStatus(ctx context.Context, gatewayTxID string) 
 	return status, nil
 }
 
-func (a *Adapter) CreateRefund(ctx context.Context, gatewayTxID string, amount int64, reason string) (string, error) {
-	body := map[string]any{"amount": amount, "reason": reason}
-	res, err := a.do(ctx, fmt.Sprintf("/v2/%s/refund", gatewayTxID), body)
+// CreateRefund calls POST /v2/{transaction_id}/refund. Midtrans deduplicates on refund_key,
+// so a retry after a lost reply can't refund twice.
+func (a *Adapter) CreateRefund(ctx context.Context, req ports.RefundRequest) (*ports.RefundResult, error) {
+	body := map[string]any{"refund_key": req.RefundKey, "amount": req.Amount}
+	if req.Reason != "" {
+		body["reason"] = req.Reason
+	}
+
+	res, err := a.do(ctx, fmt.Sprintf("/v2/%s/refund", req.GatewayTransactionID), body)
 	if err != nil {
-		return "", apperror.GatewayError("midtrans refund failed", err)
+		return nil, apperror.GatewayError("midtrans refund: no usable reply", err)
 	}
-	if res.failed() {
-		return "", apperror.GatewayError(fmt.Sprintf("midtrans refund failed: %s %s", res.code, res.message()), nil)
+
+	switch {
+	case res.code == "200":
+		return &ports.RefundResult{Accepted: true, GatewayRefundID: fmt.Sprint(res.body["refund_chargeback_id"])}, nil
+	case res.code == "406":
+		// "Duplicate refund ID": an earlier attempt with this key may have gone through.
+		// Leave the outcome to the refund notification instead of guessing.
+		return nil, apperror.GatewayError("midtrans reports duplicate refund_key "+req.RefundKey, nil)
+	case res.httpStatus >= 500 || strings.HasPrefix(res.code, "5") || strings.HasPrefix(res.code, "2"):
+		return nil, apperror.GatewayError(fmt.Sprintf("midtrans refund outcome unknown: %s %s", res.code, res.message()), nil)
+	default:
+		// 4xx: Midtrans processed the request and refused it, e.g. 412 status can't be
+		// modified, 414 invalid amount. No money moved.
+		return &ports.RefundResult{Accepted: false, DeclineReason: fmt.Sprintf("midtrans %s: %s", res.code, res.message())}, nil
 	}
-	return fmt.Sprint(res.body["refund_chargeback_id"]), nil
 }
 
 // response is a decoded Midtrans reply. Midtrans often answers HTTP 200 and reports the

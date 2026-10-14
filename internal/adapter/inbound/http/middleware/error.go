@@ -17,6 +17,7 @@ var codeToHTTP = map[apperror.Code]int{
 	apperror.CodeInvalidState:        http.StatusUnprocessableEntity,
 	apperror.CodeGatewayError:        http.StatusBadGateway,
 	apperror.CodeIdempotencyConflict: http.StatusConflict,
+	apperror.CodeConflict:            http.StatusConflict,
 	apperror.CodeInternalError:       http.StatusInternalServerError,
 }
 
