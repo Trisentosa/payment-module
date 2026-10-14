@@ -122,14 +122,14 @@ func (r *Reconciler) reconcileCharge(ctx context.Context, p *payment.Payment) {
 
 	switch {
 	case !state.Found:
-		p.MarkFailed("CHARGE_NOT_CREATED", "the gateway has no record of the charge")
+		err = p.MarkFailed("CHARGE_NOT_CREATED", "the gateway has no record of the charge")
 	case state.Status == ports.TransactionSettled:
 		if err = p.MarkPending(state.GatewayTransactionID, state.RawResponse); err == nil {
 			err = p.MarkCompleted(r.now().UTC())
 		}
 	case state.Status == ports.TransactionFailed:
 		if err = p.MarkPending(state.GatewayTransactionID, state.RawResponse); err == nil {
-			p.MarkFailed(state.GatewayStatus, "gateway status: "+state.GatewayStatus)
+			err = p.MarkFailed(state.GatewayStatus, "gateway status: "+state.GatewayStatus)
 		}
 	case state.Status == ports.TransactionPending:
 		// The caller never received the payment instructions, so nobody can finish this
@@ -138,7 +138,7 @@ func (r *Reconciler) reconcileCharge(ctx context.Context, p *payment.Payment) {
 			return
 		}
 		if err = p.MarkPending(state.GatewayTransactionID, state.RawResponse); err == nil {
-			p.MarkFailed("CHARGE_REPLY_LOST", "the charge reply was lost before the caller got payment instructions; cancelled at the gateway")
+			err = p.MarkFailed("CHARGE_REPLY_LOST", "the charge reply was lost before the caller got payment instructions; cancelled at the gateway")
 		}
 	default:
 		log.Warn("reconciler: unrecognised gateway status, leaving the payment INITIATED", "gateway_status", state.GatewayStatus)

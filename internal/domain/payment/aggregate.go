@@ -119,11 +119,15 @@ func (p *Payment) MarkCompleted(paidAt time.Time) error {
 }
 
 // MarkFailed transitions to FAILED from any non-terminal state.
-func (p *Payment) MarkFailed(errorCode, errorMessage string) {
+func (p *Payment) MarkFailed(errorCode, errorMessage string) error {
+	if p.Status.IsTerminal() {
+		return apperror.InvalidState("cannot fail a payment that is already " + string(p.Status))
+	}
 	now := time.Now().UTC()
 	p.Status = StatusFailed
 	p.UpdatedAt = now
 	p.raise(PaymentFailed{PaymentID: p.ID, ErrorCode: errorCode, ErrorMessage: errorMessage, OccurredAt: now})
+	return nil
 }
 
 // MarkExpired transitions to EXPIRED from PENDING or INITIATED.

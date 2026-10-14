@@ -4,6 +4,8 @@ package fake
 
 import (
 	"context"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -158,13 +160,49 @@ func clone(p *payment.Payment) *payment.Payment {
 	return &c
 }
 
-func (r *PaymentRepo) FindExpired(context.Context, int) ([]*payment.Payment, error) { return nil, nil }
+// FindExpired returns PENDING payments past their expiry, like the Postgres query.
+func (r *PaymentRepo) FindExpired(_ context.Context, limit int) ([]*payment.Payment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now()
+	var out []*payment.Payment
+	for _, p := range r.byID {
+		if p.Status == payment.StatusPending && p.ExpiredAt != nil && p.ExpiredAt.Before(now) && len(out) < limit {
+			out = append(out, clone(p))
+		}
+	}
+	return out, nil
+}
 
+// ListPaginated filters like the Postgres query: newest first, keyset cursor on created_at.
 func (r *PaymentRepo) ListPaginated(_ context.Context, f payment.ListFilter) ([]*payment.Payment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.lastList = f
-	return nil, nil
+
+	var out []*payment.Payment
+	for _, p := range r.byID {
+		switch {
+		case f.Status != "" && string(p.Status) != f.Status,
+			f.CallerService != "" && p.CallerService != f.CallerService,
+			f.GatewayType != "" && string(p.GatewayType) != f.GatewayType,
+			f.ReferenceID != "" && !strings.HasPrefix(p.ReferenceID, f.ReferenceID),
+			f.From != nil && p.CreatedAt.Before(*f.From),
+			f.To != nil && p.CreatedAt.After(*f.To),
+			f.Cursor != nil && !p.CreatedAt.Before(*f.Cursor):
+			continue
+		}
+		out = append(out, clone(p))
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	limit := f.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 
 // LastListFilter returns the filter of the most recent ListPaginated call.

@@ -19,9 +19,15 @@ const (
 var terminalStatuses = map[Status]bool{
 	StatusCompleted:         true,
 	StatusFailed:            true,
+	StatusCancelled:         true,
 	StatusExpired:           true,
 	StatusPartiallyRefunded: true,
 	StatusRefunded:          true,
 }
 
 func (s Status) IsTerminal() bool { return terminalStatuses[s] }
+
+// WasPaid reports whether the customer's money was collected, even if since refunded.
+func (s Status) WasPaid() bool {
+	return s == StatusCompleted || s == StatusPartiallyRefunded || s == StatusRefunded
+}

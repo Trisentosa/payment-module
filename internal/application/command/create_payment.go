@@ -147,7 +147,9 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 			return nil, err
 		}
 	case ports.TransactionFailed:
-		p.MarkFailed("DECLINED", "declined by gateway at charge time")
+		if err = p.MarkFailed("DECLINED", "declined by gateway at charge time"); err != nil {
+			return nil, err
+		}
 	}
 
 	if err = h.repo.Save(ctx, p); err != nil {
@@ -179,7 +181,7 @@ func (h *CreatePaymentHandler) chargeFailed(ctx context.Context, p *payment.Paym
 			"the gateway did not confirm the charge; payment %s will be reconciled shortly, check GET /payments/%s", p.ID, p.ID), err)
 	}
 
-	p.MarkFailed("GATEWAY_ERROR", err.Error())
+	_ = p.MarkFailed("GATEWAY_ERROR", err.Error()) // INITIATED, so this can't be refused
 	if saveErr := h.repo.Save(ctx, p); saveErr != nil {
 		log.Warn("failed to record gateway failure", "payment_id", p.ID, "err", saveErr)
 	}

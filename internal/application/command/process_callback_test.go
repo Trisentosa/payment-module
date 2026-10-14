@@ -226,3 +226,29 @@ func TestProcessCallback_RefundNotificationLeavesUnknownAndMismatchedAlone(t *te
 		t.Errorf("saved %d times, want 0", repo.SaveCalls)
 	}
 }
+
+func TestProcessCallback_LateNotificationsDontReopenCancelledPayment(t *testing.T) {
+	for _, n := range []ports.WebhookNotification{
+		{Status: ports.TransactionFailed, GatewayStatus: "cancel"}, // Midtrans confirming our own cancel
+		{Status: ports.TransactionFailed, GatewayStatus: "expire"},
+		{Status: ports.TransactionSettled, GatewayStatus: "settlement"}, // the customer paid just after cancelling
+	} {
+		t.Run(n.GatewayStatus, func(t *testing.T) {
+			ctx := context.Background()
+			p := pendingPayment(t, "ORDER-C", "gw-tx-c")
+			if err := p.Cancel(); err != nil {
+				t.Fatalf("Cancel: %v", err)
+			}
+			repo := fake.NewPaymentRepo(p)
+			n.PaymentID, n.GatewayTransactionID = p.ID.String(), "gw-tx-c"
+			gw := &fake.Gateway{Notification: &n}
+
+			if err := callbackHandler(repo, gw, fake.NewCache()).Handle(ctx, command.ProcessCallbackCommand{GatewayType: "MIDTRANS"}); err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			if got := stored(t, repo, p.ID).Status; got != payment.StatusCancelled {
+				t.Errorf("status: got %s, want CANCELLED", got)
+			}
+		})
+	}
+}

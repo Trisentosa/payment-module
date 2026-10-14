@@ -346,3 +346,38 @@ func TestPaymentRepo_ListPaginated(t *testing.T) {
 		t.Errorf("first row: version=%d, order newest-first? %v >= %v", got[0].Version, got[0].CreatedAt, got[1].CreatedAt)
 	}
 }
+
+// Regression (F8): sequence numbers restarted at 1 on every save, so a payment's event
+// history couldn't be put back in order.
+func TestPaymentRepo_EventSequenceContinuesAcrossSaves(t *testing.T) {
+	pool := setupTestDB(t)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
+	ctx := context.Background()
+
+	p := completedTestPayment(t, ctx, repo) // saves: [Initiated], then [Pending, Completed]
+	if _, err := p.RequestRefund("rf-1", 1000, "", "svc"); err != nil {
+		t.Fatalf("RequestRefund: %v", err)
+	}
+	if err := repo.Save(ctx, p); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	rows, err := pool.Query(ctx, `SELECT event_type, sequence_number FROM payment_events WHERE aggregate_id = $1 ORDER BY sequence_number`, p.ID)
+	if err != nil {
+		t.Fatalf("query events: %v", err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var typ string
+		var seq int
+		if err := rows.Scan(&typ, &seq); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		got = append(got, fmt.Sprintf("%d:%s", seq, typ))
+	}
+	want := "[1:PaymentInitiated 2:PaymentPending 3:PaymentCompleted 4:RefundRequested]"
+	if fmt.Sprint(got) != want {
+		t.Errorf("events: %v, want %s", got, want)
+	}
+}

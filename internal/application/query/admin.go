@@ -31,10 +31,7 @@ func NewAdminListPaymentsHandler(repo payment.Repository) *AdminListPaymentsHand
 }
 
 func (h *AdminListPaymentsHandler) Handle(ctx context.Context, q AdminListPaymentsQuery) (*ListPaymentsResult, error) {
-	limit := q.Limit
-	if limit <= 0 || limit > 100 {
-		limit = 20
-	}
+	limit := clampLimit(q.Limit, 20)
 
 	payments, err := h.repo.ListPaginated(ctx, payment.ListFilter{
 		Status:        q.Status,

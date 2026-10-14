@@ -73,9 +73,16 @@ func (h *ProcessCallbackHandler) Handle(ctx context.Context, cmd ProcessCallback
 			}
 			changed = true
 		case ports.TransactionFailed:
-			p.MarkFailed(n.GatewayStatus, "gateway status: "+n.GatewayStatus)
+			if err = p.MarkFailed(n.GatewayStatus, "gateway status: "+n.GatewayStatus); err != nil {
+				return err
+			}
 			changed = true
 		}
+	} else if n.Status == ports.TransactionSettled && !p.Status.WasPaid() {
+		// The customer paid a payment PayGate had already closed, e.g. right after a
+		// cancel. The money is real and must go back; the payment stays closed.
+		log.Error("gateway reports money received for a closed payment; refund the customer",
+			"payment_id", p.ID, "status", p.Status, "gateway_status", n.GatewayStatus, "gateway_tx_id", n.GatewayTransactionID)
 	}
 
 	if !changed {

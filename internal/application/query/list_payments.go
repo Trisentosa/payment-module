@@ -35,10 +35,7 @@ func (h *ListPaymentsHandler) Handle(ctx context.Context, q ListPaymentsQuery) (
 	if q.CallerService == "" {
 		return nil, apperror.InvalidInput("caller_service is required")
 	}
-	limit := q.Limit
-	if limit <= 0 || limit > 100 {
-		limit = 50
-	}
+	limit := clampLimit(q.Limit, 50)
 
 	payments, err := h.repo.ListPaginated(ctx, payment.ListFilter{
 		Status:        q.Status,
@@ -65,4 +62,18 @@ func (h *ListPaymentsHandler) Handle(ctx context.Context, q ListPaymentsQuery) (
 	}
 
 	return &ListPaymentsResult{Payments: dtos, NextCursor: nextCursor}, nil
+}
+
+// maxPageSize caps list pages. Larger requests get the maximum, not the default.
+const maxPageSize = 100
+
+func clampLimit(requested, def int) int {
+	switch {
+	case requested <= 0:
+		return def
+	case requested > maxPageSize:
+		return maxPageSize
+	default:
+		return requested
+	}
 }

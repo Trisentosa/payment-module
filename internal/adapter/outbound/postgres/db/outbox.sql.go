@@ -14,7 +14,7 @@ import (
 )
 
 const getPendingOutboxEvents = `-- name: GetPendingOutboxEvents :many
-SELECT id, aggregate_id, event_type, payload, retry_count
+SELECT id, aggregate_id, event_type, payload, retry_count, created_at
 FROM outbox_events
 WHERE status = 'PENDING'
   AND scheduled_at <= NOW()
@@ -29,8 +29,11 @@ type GetPendingOutboxEventsRow struct {
 	EventType   string
 	Payload     json.RawMessage
 	RetryCount  int32
+	CreatedAt   pgtype.Timestamptz
 }
 
+// Run inside a transaction: the row locks are what keep other workers off these rows
+// until this worker has published them and committed.
 func (q *Queries) GetPendingOutboxEvents(ctx context.Context, limit int32) ([]GetPendingOutboxEventsRow, error) {
 	rows, err := q.db.Query(ctx, getPendingOutboxEvents, limit)
 	if err != nil {
@@ -46,6 +49,7 @@ func (q *Queries) GetPendingOutboxEvents(ctx context.Context, limit int32) ([]Ge
 			&i.EventType,
 			&i.Payload,
 			&i.RetryCount,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -78,7 +82,8 @@ UPDATE outbox_events
 SET status       = CASE WHEN retry_count >= 5 THEN 'FAILED' ELSE 'PENDING' END,
     retry_count  = retry_count + 1,
     last_error   = $2,
-    scheduled_at = NOW() + (retry_count * INTERVAL '30 seconds')
+    -- Back off 30s, 60s, 90s, ... (retry_count here is the value before this failure).
+    scheduled_at = NOW() + ((retry_count + 1) * INTERVAL '30 seconds')
 WHERE id = $1
 `
 

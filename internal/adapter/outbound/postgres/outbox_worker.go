@@ -7,7 +7,6 @@ import (
 	"github.com/Trisentosa/payment-module/internal/adapter/outbound/postgres/db"
 	"github.com/Trisentosa/payment-module/internal/application/ports"
 	"github.com/Trisentosa/payment-module/internal/infrastructure/logger"
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -38,15 +37,28 @@ func (w *OutboxWorker) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			w.processBatch(ctx)
+			w.RunOnce(ctx)
 		}
 	}
 }
 
-func (w *OutboxWorker) processBatch(ctx context.Context) {
+// RunOnce publishes one batch of due outbox events. The batch is claimed with
+// FOR UPDATE SKIP LOCKED inside a transaction held until every row is marked, so
+// concurrent workers (other replicas) skip these rows instead of publishing them again.
+// If the worker dies mid-batch the transaction rolls back and the rows are published
+// again later: delivery is at-least-once, and consumers deduplicate on event_id.
+func (w *OutboxWorker) RunOnce(ctx context.Context) {
 	log := logger.FromContext(ctx)
 
-	rows, err := w.q.GetPendingOutboxEvents(ctx, int32(w.batchSize))
+	tx, err := w.pool.Begin(ctx)
+	if err != nil {
+		log.Error("outbox: begin transaction", "err", err)
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after a successful commit
+	qtx := w.q.WithTx(tx)
+
+	rows, err := qtx.GetPendingOutboxEvents(ctx, int32(w.batchSize))
 	if err != nil {
 		log.Error("outbox poll failed", "err", err)
 		return
@@ -58,28 +70,24 @@ func (w *OutboxWorker) processBatch(ctx context.Context) {
 			AggregateID: row.AggregateID,
 			EventType:   row.EventType,
 			Payload:     row.Payload,
-			OccurredAt:  time.Now().UTC(),
+			OccurredAt:  row.CreatedAt.Time.UTC(),
 		})
 		if pubErr != nil {
-			w.markFailed(ctx, row.ID, pubErr)
 			log.Error("outbox publish failed", "outbox_id", row.ID, "err", pubErr)
-			continue
+			err = qtx.MarkOutboxEventFailed(ctx, db.MarkOutboxEventFailedParams{
+				ID:        row.ID,
+				LastError: pgtype.Text{String: pubErr.Error(), Valid: true},
+			})
+		} else {
+			err = qtx.MarkOutboxEventPublished(ctx, row.ID)
 		}
-		w.markPublished(ctx, row.ID)
+		if err != nil {
+			log.Error("outbox: mark event", "outbox_id", row.ID, "err", err)
+			return
+		}
 	}
-}
 
-func (w *OutboxWorker) markPublished(ctx context.Context, id uuid.UUID) {
-	if err := w.q.MarkOutboxEventPublished(ctx, id); err != nil {
-		logger.FromContext(ctx).Error("outbox mark published failed", "outbox_id", id, "err", err)
-	}
-}
-
-func (w *OutboxWorker) markFailed(ctx context.Context, id uuid.UUID, err error) {
-	if dbErr := w.q.MarkOutboxEventFailed(ctx, db.MarkOutboxEventFailedParams{
-		ID:        id,
-		LastError: pgtype.Text{String: err.Error(), Valid: true},
-	}); dbErr != nil {
-		logger.FromContext(ctx).Error("outbox mark failed failed", "outbox_id", id, "err", dbErr)
+	if err = tx.Commit(ctx); err != nil {
+		log.Error("outbox: commit", "err", err)
 	}
 }

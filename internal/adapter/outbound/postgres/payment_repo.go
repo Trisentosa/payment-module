@@ -104,12 +104,18 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 		}
 	}
 
+	// Number events on from the last stored one. Saves of one payment are serialised by
+	// the version check above, and a unique index backs this up.
+	lastSeq, err := qtx.GetLastEventSequence(ctx, p.ID)
+	if err != nil {
+		return apperror.Internal("read last event sequence", err)
+	}
 	events := p.PopEvents()
 	for i, evt := range events {
 		err = qtx.InsertPaymentEvent(ctx, db.InsertPaymentEventParams{
 			AggregateID:    p.ID,
 			EventType:      evt.EventType(),
-			SequenceNumber: int32(i + 1),
+			SequenceNumber: lastSeq + int32(i+1),
 			Payload:        eventPayload(evt),
 		})
 		if err != nil {

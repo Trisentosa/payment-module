@@ -33,18 +33,21 @@ func (j *ExpiryJob) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			j.runOnce(ctx)
+			j.RunOnce(ctx)
 		}
 	}
 }
 
-func (j *ExpiryJob) runOnce(ctx context.Context) {
+// RunOnce expires overdue PENDING payments, unless another replica holds the lock.
+func (j *ExpiryJob) RunOnce(ctx context.Context) {
 	log := logger.FromContext(ctx)
 
 	acquired, err := j.cache.SetNX(ctx, expiryLockKey, "1", expiryLockTTL)
 	if err != nil || !acquired {
 		return
 	}
+	// Release on the way out. The TTL only covers a replica that dies mid-run.
+	defer func() { _ = j.cache.Delete(ctx, expiryLockKey) }()
 
 	expired, err := j.repo.FindExpired(ctx, expiryBatch)
 	if err != nil {

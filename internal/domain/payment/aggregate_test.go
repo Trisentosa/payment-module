@@ -102,7 +102,7 @@ func TestMarkPending_RejectsNonInitiated(t *testing.T) {
 func TestStatus_IsTerminal(t *testing.T) {
 	terminal := []payment.Status{
 		payment.StatusCompleted, payment.StatusFailed,
-		payment.StatusExpired, payment.StatusPartiallyRefunded, payment.StatusRefunded,
+		payment.StatusCancelled, payment.StatusExpired, payment.StatusPartiallyRefunded, payment.StatusRefunded,
 	}
 	for _, s := range terminal {
 		if !s.IsTerminal() {
@@ -112,7 +112,7 @@ func TestStatus_IsTerminal(t *testing.T) {
 
 	nonTerminal := []payment.Status{
 		payment.StatusInitiated, payment.StatusPending,
-		payment.StatusProcessing, payment.StatusCancelled,
+		payment.StatusProcessing,
 	}
 	for _, s := range nonTerminal {
 		if s.IsTerminal() {
@@ -145,5 +145,18 @@ func TestNew_RejectsUnknownMethod(t *testing.T) {
 		payment.CustomerInfo{}, "", nil, nil)
 	if !apperror.IsCode(err, apperror.CodeInvalidInput) {
 		t.Fatalf("expected INVALID_INPUT, got %v", err)
+	}
+}
+
+func TestMarkFailed_RefusesClosedPayments(t *testing.T) {
+	p := newTestPayment(t)
+	_ = p.MarkPending("GW-TX-001", nil)
+	_ = p.Cancel()
+
+	if err := p.MarkFailed("expire", "late notification"); !apperror.IsCode(err, apperror.CodeInvalidState) {
+		t.Fatalf("expected INVALID_STATE, got %v", err)
+	}
+	if p.Status != payment.StatusCancelled {
+		t.Errorf("status: got %s, want CANCELLED", p.Status)
 	}
 }

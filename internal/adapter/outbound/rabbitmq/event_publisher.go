@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -79,28 +80,11 @@ func NewPublisher(url string) (*Publisher, error) {
 func (p *Publisher) Publish(ctx context.Context, event ports.DomainEvent) error {
 	log := logger.FromContext(ctx)
 
-	rk, ok := routingKey[event.EventType]
-	if !ok {
+	rk, body, err := envelope(event)
+	if errors.Is(err, errUnroutable) {
 		log.Warn("unknown event type, skipping publish", "event_type", event.EventType)
 		return nil
 	}
-
-	occurredAt := event.OccurredAt
-	if occurredAt.IsZero() {
-		occurredAt = time.Now().UTC()
-	}
-
-	envelope := map[string]any{
-		"event_id":       event.ID,
-		"event_type":     rk,
-		"aggregate_id":   event.AggregateID,
-		"aggregate_type": "PAYMENT",
-		"version":        1,
-		"occurred_at":    occurredAt,
-		"data":           json.RawMessage(event.Payload),
-		"source_service": "paygate-service",
-	}
-	body, err := json.Marshal(envelope)
 	if err != nil {
 		return apperror.Internal("marshal event envelope", err)
 	}
@@ -136,6 +120,32 @@ func (p *Publisher) Publish(ctx context.Context, event ports.DomainEvent) error 
 
 	log.Info("event published", "routing_key", rk, "aggregate_id", event.AggregateID)
 	return nil
+}
+
+var errUnroutable = errors.New("no routing key for event type")
+
+// envelope returns the routing key and message body for an event. The body is the
+// versioned envelope consumers parse; event_id is what they deduplicate on.
+func envelope(event ports.DomainEvent) (string, []byte, error) {
+	rk, ok := routingKey[event.EventType]
+	if !ok {
+		return "", nil, errUnroutable
+	}
+	occurredAt := event.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	body, err := json.Marshal(map[string]any{
+		"event_id":       event.ID,
+		"event_type":     rk,
+		"aggregate_id":   event.AggregateID,
+		"aggregate_type": "PAYMENT",
+		"version":        1,
+		"occurred_at":    occurredAt,
+		"data":           json.RawMessage(event.Payload),
+		"source_service": "paygate-service",
+	})
+	return rk, body, err
 }
 
 func (p *Publisher) Close() {
