@@ -1,6 +1,6 @@
 -- name: GetPaymentAttemptsByPayment :many
-SELECT id, payment_id, gateway_transaction_id, attempt_number, status, error_code, error_message,
-       gateway_request, gateway_response, http_status_code, duration_ms, created_at
+SELECT id, payment_id, refund_id, operation, gateway_transaction_id, attempt_number, status,
+       error_code, error_message, gateway_request, gateway_response, http_status_code, duration_ms, created_at
 FROM payment_attempts
 WHERE payment_id = $1
 ORDER BY attempt_number ASC;

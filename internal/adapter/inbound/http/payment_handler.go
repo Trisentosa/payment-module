@@ -18,12 +18,12 @@ import (
 )
 
 type PaymentHandler struct {
-	createHandler  *command.CreatePaymentHandler
-	cancelHandler  *command.CancelPaymentHandler
-	idem           *middleware.IdempotencyService
-	getHandler     *query.GetPaymentHandler
+	createHandler   *command.CreatePaymentHandler
+	cancelHandler   *command.CancelPaymentHandler
+	idem            *middleware.IdempotencyService
+	getHandler      *query.GetPaymentHandler
 	getByRefHandler *query.GetByRefHandler
-	listHandler    *query.ListPaymentsHandler
+	listHandler     *query.ListPaymentsHandler
 }
 
 func NewPaymentHandler(
@@ -54,7 +54,7 @@ func (h *PaymentHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	log := logger.FromContext(ctx)
 
-	callerService := r.Header.Get("X-Service-Name")
+	callerService := middleware.CallerService(ctx)
 	idemKey := middleware.IdempotencyKey(callerService, req.ReferenceID)
 	reqHash := middleware.RequestFingerprint(req)
 
@@ -185,7 +185,7 @@ func optStr(s string) *string {
 
 func (h *PaymentHandler) CancelPayment(w http.ResponseWriter, r *http.Request) {
 	paymentIDStr := r.PathValue("id")
-	callerService := r.Header.Get("X-Service-Name")
+	callerService := middleware.CallerService(r.Context())
 
 	cmd := command.CancelPaymentCommand{CallerService: callerService}
 	if err := cmd.PaymentID.Scan(paymentIDStr); err != nil {
@@ -214,7 +214,7 @@ func (h *PaymentHandler) GetPayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	dto, err := h.getHandler.Handle(r.Context(), query.GetPaymentQuery{ID: id})
+	dto, err := h.getHandler.Handle(r.Context(), query.GetPaymentQuery{ID: id, CallerService: middleware.CallerService(r.Context())})
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
@@ -226,7 +226,7 @@ func (h *PaymentHandler) GetPayment(w http.ResponseWriter, r *http.Request) {
 
 func (h *PaymentHandler) GetPaymentByRef(w http.ResponseWriter, r *http.Request) {
 	refID := r.PathValue("reference_id")
-	callerService := r.Header.Get("X-Service-Name")
+	callerService := middleware.CallerService(r.Context())
 
 	dto, err := h.getByRefHandler.Handle(r.Context(), query.GetByRefQuery{
 		ReferenceID:   refID,
@@ -244,9 +244,10 @@ func (h *PaymentHandler) GetPaymentByRef(w http.ResponseWriter, r *http.Request)
 func (h *PaymentHandler) ListPayments(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 
+	// Always the authenticated caller; a caller_service query parameter is ignored.
 	lq := query.ListPaymentsQuery{
 		Status:        q.Get("status"),
-		CallerService: q.Get("caller_service"),
+		CallerService: middleware.CallerService(r.Context()),
 	}
 
 	if v := q.Get("from"); v != "" {

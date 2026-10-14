@@ -9,9 +9,12 @@ import (
 
 type AttemptRow struct {
 	ID                   uuid.UUID
+	Operation            string
+	RefundID             *uuid.UUID
 	AttemptNumber        int32
 	Status               string
 	ErrorCode            string
+	ErrorMessage         string
 	GatewayTransactionID string
 	DurationMs           int64
 	CreatedAt            time.Time

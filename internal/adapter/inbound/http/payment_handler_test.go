@@ -1,6 +1,7 @@
 package http_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -9,9 +10,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	httpAdapter "github.com/Trisentosa/payment-module/internal/adapter/inbound/http"
 	"github.com/Trisentosa/payment-module/internal/adapter/inbound/http/middleware"
 	"github.com/Trisentosa/payment-module/internal/application/command"
+	"github.com/Trisentosa/payment-module/internal/application/query"
+	"github.com/Trisentosa/payment-module/internal/domain/payment"
+	"github.com/Trisentosa/payment-module/internal/pkg/apikey"
 	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
 	"github.com/Trisentosa/payment-module/internal/testsupport/fake"
 )
@@ -27,8 +33,22 @@ const createBody = `{
 	"customer_email": "alice@example.com"
 }`
 
+const (
+	orderKey   = "pgk_order-service-test-key"
+	billingKey = "pgk_billing-service-test-key"
+)
+
+// callerKeys mirrors CALLER_API_KEYS for the two test services.
+var callerKeys = map[string]string{
+	apikey.Hash(orderKey):   "order-service",
+	apikey.Hash(billingKey): "billing-service",
+}
+
+// harness serves the caller API the way cmd/server wires it: real handlers on fakes,
+// behind CallerAuth.
 type harness struct {
-	handler *httpAdapter.PaymentHandler
+	mux     http.Handler
+	repo    *fake.PaymentRepo
 	gateway *fake.Gateway
 	cache   *fake.Cache
 }
@@ -36,17 +56,40 @@ type harness struct {
 func newHarness() *harness {
 	gw := &fake.Gateway{}
 	c := fake.NewCache()
-	create := command.NewCreatePaymentHandler(fake.NewPaymentRepo(), fake.GatewayFactory{"MIDTRANS": gw}, nil)
-	h := httpAdapter.NewPaymentHandler(create, nil, middleware.NewIdempotencyService(c, time.Hour), nil, nil, nil)
-	return &harness{handler: h, gateway: gw, cache: c}
+	repo := fake.NewPaymentRepo()
+	factory := fake.GatewayFactory{"MIDTRANS": gw}
+
+	get := query.NewGetPaymentHandler(repo, c, func(payment.Status) time.Duration { return time.Minute })
+	h := httpAdapter.NewPaymentHandler(
+		command.NewCreatePaymentHandler(repo, factory, nil),
+		command.NewCancelPaymentHandler(repo, factory, c, &fake.AttemptRecorder{}),
+		middleware.NewIdempotencyService(c, time.Hour),
+		get,
+		query.NewGetByRefHandler(repo, c, get),
+		query.NewListPaymentsHandler(repo),
+	)
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /payments", h.CreatePayment)
+	mux.HandleFunc("DELETE /payments/{id}", h.CancelPayment)
+	mux.HandleFunc("GET /payments", h.ListPayments)
+	mux.HandleFunc("GET /payments/{id}", h.GetPayment)
+	mux.HandleFunc("GET /payments/ref/{reference_id}", h.GetPaymentByRef)
+	return &harness{mux: middleware.CallerAuth(callerKeys)(mux), repo: repo, gateway: gw, cache: c}
 }
 
-func (h *harness) post(body string) *httptest.ResponseRecorder {
-	req := httptest.NewRequest(http.MethodPost, "/payments", strings.NewReader(body))
-	req.Header.Set("X-Service-Name", "order-service")
+func (h *harness) do(method, path, key, body string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
+	}
 	rec := httptest.NewRecorder()
-	h.handler.CreatePayment(rec, req)
+	h.mux.ServeHTTP(rec, req)
 	return rec
+}
+
+// post creates a payment as order-service.
+func (h *harness) post(body string) *httptest.ResponseRecorder {
+	return h.do(http.MethodPost, "/payments", orderKey, body)
 }
 
 func TestCreatePayment_RetryReplaysOriginalResponse(t *testing.T) {
@@ -145,5 +188,83 @@ func TestCreatePayment_ResponseCarriesNextAction(t *testing.T) {
 	// Older VA callers still read the deprecated map.
 	if resp.PaymentInstructions["va_number"] != "1234567890" {
 		t.Errorf("payment_instructions.va_number: got %v", resp.PaymentInstructions["va_number"])
+	}
+}
+
+// createdID creates a payment as order-service and returns its ID.
+func createdID(t *testing.T, h *harness) string {
+	t.Helper()
+	rec := h.post(createBody)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create: status %d body %s", rec.Code, rec.Body)
+	}
+	var resp struct {
+		PaymentID string `json:"payment_id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	return resp.PaymentID
+}
+
+func TestCallerAPI_RequiresAKey(t *testing.T) {
+	h := newHarness()
+	req := httptest.NewRequest(http.MethodPost, "/payments", strings.NewReader(createBody))
+	req.Header.Set("X-Service-Name", "order-service") // used to be enough on its own
+	rec := httptest.NewRecorder()
+	h.mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status %d, want 401", rec.Code)
+	}
+	if h.gateway.CreateCalls != 0 {
+		t.Error("unauthenticated request reached the gateway")
+	}
+}
+
+func TestCallerAPI_PaymentBelongsToTheKeysService(t *testing.T) {
+	h := newHarness()
+	id := createdID(t, h)
+
+	p, err := h.repo.FindByID(context.Background(), uuid.MustParse(id))
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	if p.CallerService != "order-service" {
+		t.Errorf("caller_service: got %q, want the key's service", p.CallerService)
+	}
+}
+
+func TestCallerAPI_OtherServicesCantSeeOrCancel(t *testing.T) {
+	h := newHarness()
+	id := createdID(t, h)
+
+	for name, req := range map[string][2]string{
+		"get":          {http.MethodGet, "/payments/" + id},
+		"by reference": {http.MethodGet, "/payments/ref/ORDER-77"},
+		"cancel":       {http.MethodDelete, "/payments/" + id},
+	} {
+		if rec := h.do(req[0], req[1], billingKey, ""); rec.Code != http.StatusNotFound {
+			t.Errorf("%s as billing-service: status %d body %s, want 404", name, rec.Code, rec.Body)
+		}
+	}
+
+	// The owner still can.
+	if rec := h.do(http.MethodGet, "/payments/"+id, orderKey, ""); rec.Code != http.StatusOK {
+		t.Errorf("get as owner: status %d", rec.Code)
+	}
+	if rec := h.do(http.MethodDelete, "/payments/"+id, orderKey, ""); rec.Code != http.StatusOK {
+		t.Errorf("cancel as owner: status %d body %s", rec.Code, rec.Body)
+	}
+}
+
+func TestCallerAPI_ListIgnoresCallerServiceParameter(t *testing.T) {
+	h := newHarness()
+
+	// Asking for order-service's payments as billing-service must still be scoped to billing.
+	rec := h.do(http.MethodGet, "/payments?caller_service=order-service", billingKey, "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("list: status %d body %s", rec.Code, rec.Body)
+	}
+	if got := h.repo.LastListFilter().CallerService; got != "billing-service" {
+		t.Errorf("list filter caller: got %q, want billing-service", got)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Trisentosa/payment-module/internal/adapter/outbound/postgres/db"
 	"github.com/Trisentosa/payment-module/internal/application/ports"
@@ -78,25 +79,43 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 			return err
 		}
 	} else {
-		err = qtx.UpdatePaymentFull(ctx, db.UpdatePaymentFullParams{
+		var updated int64
+		updated, err = qtx.UpdatePaymentFull(ctx, db.UpdatePaymentFullParams{
 			ID:                     p.ID,
 			GatewayTransactionID:   toNullableString(p.GatewayTransactionID),
 			Status:                 string(p.Status),
 			GatewayResponsePayload: marshalJSONOrNil(p.GatewayResponsePayload),
 			PaidAt:                 p.PaidAt,
 			UpdatedAt:              pgtype.Timestamptz{Time: p.UpdatedAt, Valid: true},
+			Version:                int32(p.Version),
 		})
+		if err == nil && updated == 0 {
+			err = apperror.Conflict("payment " + p.ID.String() + " was changed by another request; reload and retry")
+			return err
+		}
 	}
 	if err != nil {
 		return apperror.Internal("persist payment", err)
 	}
 
+	for _, rf := range p.Refunds {
+		if err = qtx.UpsertRefund(ctx, toRefundParams(rf)); err != nil {
+			return apperror.Internal("persist refund", err)
+		}
+	}
+
+	// Number events on from the last stored one. Saves of one payment are serialised by
+	// the version check above, and a unique index backs this up.
+	lastSeq, err := qtx.GetLastEventSequence(ctx, p.ID)
+	if err != nil {
+		return apperror.Internal("read last event sequence", err)
+	}
 	events := p.PopEvents()
 	for i, evt := range events {
 		err = qtx.InsertPaymentEvent(ctx, db.InsertPaymentEventParams{
 			AggregateID:    p.ID,
 			EventType:      evt.EventType(),
-			SequenceNumber: int32(i + 1),
+			SequenceNumber: lastSeq + int32(i+1),
 			Payload:        eventPayload(evt),
 		})
 		if err != nil {
@@ -114,6 +133,11 @@ func (r *PaymentRepo) Save(ctx context.Context, p *payment.Payment) error {
 	if err = tx.Commit(ctx); err != nil {
 		return apperror.Internal("commit transaction", err)
 	}
+	if isNew {
+		p.Version = 1
+	} else {
+		p.Version++
+	}
 
 	log.Info("payment saved", "payment_id", p.ID, "status", p.Status)
 	return nil
@@ -127,7 +151,7 @@ func (r *PaymentRepo) FindByID(ctx context.Context, id uuid.UUID) (*payment.Paym
 	if err != nil {
 		return nil, apperror.Internal("get payment", err)
 	}
-	return toDomain(row)
+	return r.withRefunds(ctx, row)
 }
 
 func (r *PaymentRepo) FindByReference(ctx context.Context, referenceID, callerService string) (*payment.Payment, error) {
@@ -141,7 +165,7 @@ func (r *PaymentRepo) FindByReference(ctx context.Context, referenceID, callerSe
 	if err != nil {
 		return nil, apperror.Internal("get payment by reference", err)
 	}
-	return toDomain(row)
+	return r.withRefunds(ctx, row)
 }
 
 func (r *PaymentRepo) FindByGatewayTransactionID(ctx context.Context, gatewayTxID string) (*payment.Payment, error) {
@@ -152,7 +176,7 @@ func (r *PaymentRepo) FindByGatewayTransactionID(ctx context.Context, gatewayTxI
 	if err != nil {
 		return nil, apperror.Internal("get payment by gateway tx", err)
 	}
-	return toDomain(row)
+	return r.withRefunds(ctx, row)
 }
 
 func (r *PaymentRepo) FindExpired(ctx context.Context, limit int) ([]*payment.Payment, error) {
@@ -198,6 +222,7 @@ func toDomain(row db.Payment) (*payment.Payment, error) {
 		CreatedAt:            row.CreatedAt.Time,
 		UpdatedAt:            row.UpdatedAt.Time,
 		DeletedAt:            row.DeletedAt,
+		Version:              int(row.Version),
 	}
 	if err := json.Unmarshal(row.CustomerInfo, &p.CustomerInfo); err != nil {
 		return nil, apperror.Internal("unmarshal customer_info", err)
@@ -305,7 +330,7 @@ func (r *PaymentRepo) ListPaginated(ctx context.Context, f payment.ListFilter) (
 	q := `SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
 		       status, amount, currency, payment_method_type,
 		       customer_info, metadata, gateway_request_payload, gateway_response_payload,
-		       description, expired_at, paid_at, created_at, updated_at, deleted_at
+		       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 		  FROM payments`
 	for j, c := range where {
 		if j == 0 {
@@ -331,7 +356,7 @@ func (r *PaymentRepo) ListPaginated(ctx context.Context, f payment.ListFilter) (
 			&row.GatewayTransactionID, &row.Status, &row.Amount, &row.Currency,
 			&row.PaymentMethodType, &row.CustomerInfo, &row.Metadata,
 			&row.GatewayRequestPayload, &row.GatewayResponsePayload, &row.Description,
-			&row.ExpiredAt, &row.PaidAt, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt,
+			&row.ExpiredAt, &row.PaidAt, &row.CreatedAt, &row.UpdatedAt, &row.DeletedAt, &row.Version,
 		); err != nil {
 			return nil, apperror.Internal("scan payment row", err)
 		}
@@ -345,4 +370,93 @@ func (r *PaymentRepo) ListPaginated(ctx context.Context, f payment.ListFilter) (
 		return nil, apperror.Internal("list payments rows", err)
 	}
 	return results, nil
+}
+
+// withRefunds maps a payment row and loads its refunds, which commands need to enforce
+// refund limits. List queries skip this; they never feed a save.
+func (r *PaymentRepo) withRefunds(ctx context.Context, row db.Payment) (*payment.Payment, error) {
+	p, err := toDomain(row)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := r.q.ListRefundsByPayment(ctx, p.ID)
+	if err != nil {
+		return nil, apperror.Internal("list refunds", err)
+	}
+	for _, rr := range rows {
+		p.Refunds = append(p.Refunds, &payment.Refund{
+			ID:              rr.ID,
+			PaymentID:       rr.PaymentID,
+			ReferenceID:     rr.ReferenceID,
+			Amount:          rr.Amount,
+			Reason:          rr.Reason.String,
+			Status:          payment.RefundStatus(rr.Status),
+			GatewayRefundID: derefString(rr.GatewayRefundID),
+			FailureReason:   rr.FailureReason.String,
+			RequestedBy:     rr.RequestedBy,
+			CreatedAt:       rr.CreatedAt.Time,
+			UpdatedAt:       rr.UpdatedAt.Time,
+			CompletedAt:     rr.CompletedAt,
+		})
+	}
+	return p, nil
+}
+
+func toRefundParams(rf *payment.Refund) db.UpsertRefundParams {
+	return db.UpsertRefundParams{
+		ID:              rf.ID,
+		PaymentID:       rf.PaymentID,
+		ReferenceID:     rf.ReferenceID,
+		GatewayRefundID: toNullableString(rf.GatewayRefundID),
+		Status:          string(rf.Status),
+		Amount:          rf.Amount,
+		Reason:          pgtype.Text{String: rf.Reason, Valid: rf.Reason != ""},
+		FailureReason:   pgtype.Text{String: rf.FailureReason, Valid: rf.FailureReason != ""},
+		RequestedBy:     rf.RequestedBy,
+		CreatedAt:       pgtype.Timestamptz{Time: rf.CreatedAt, Valid: true},
+		UpdatedAt:       pgtype.Timestamptz{Time: rf.UpdatedAt, Valid: true},
+		CompletedAt:     rf.CompletedAt,
+	}
+}
+
+// FindAwaitingChargeOutcome returns INITIATED payments created before cutoff: their charge
+// call ended without a usable answer, so only the gateway knows what happened.
+func (r *PaymentRepo) FindAwaitingChargeOutcome(ctx context.Context, cutoff time.Time, limit int) ([]*payment.Payment, error) {
+	rows, err := r.q.GetPaymentsAwaitingChargeOutcome(ctx, db.GetPaymentsAwaitingChargeOutcomeParams{
+		CreatedAt: pgtype.Timestamptz{Time: cutoff, Valid: true},
+		Limit:     int32(limit),
+	})
+	if err != nil {
+		return nil, apperror.Internal("query payments awaiting charge outcome", err)
+	}
+	out := make([]*payment.Payment, 0, len(rows))
+	for _, row := range rows {
+		p, err := toDomain(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// FindWithPendingRefunds returns payments (refunds loaded) that have a refund still PENDING
+// since before cutoff.
+func (r *PaymentRepo) FindWithPendingRefunds(ctx context.Context, cutoff time.Time, limit int) ([]*payment.Payment, error) {
+	ids, err := r.q.GetPaymentIDsWithPendingRefunds(ctx, db.GetPaymentIDsWithPendingRefundsParams{
+		CreatedAt: pgtype.Timestamptz{Time: cutoff, Valid: true},
+		Limit:     int32(limit),
+	})
+	if err != nil {
+		return nil, apperror.Internal("query payments with pending refunds", err)
+	}
+	out := make([]*payment.Payment, 0, len(ids))
+	for _, id := range ids {
+		p, err := r.FindByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }

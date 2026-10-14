@@ -3,8 +3,8 @@ package payment
 import (
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
+	"github.com/google/uuid"
 )
 
 type GatewayType string
@@ -23,24 +23,29 @@ type CustomerInfo struct {
 }
 
 type Payment struct {
-	ID                      uuid.UUID
-	ReferenceID             string
-	CallerService           string
-	GatewayType             GatewayType
-	GatewayTransactionID    string
-	Status                  Status
-	Amount                  Money
-	PaymentMethodType       Method
-	CustomerInfo            CustomerInfo
-	Metadata                map[string]any
-	GatewayRequestPayload   map[string]any
-	GatewayResponsePayload  map[string]any
-	Description             string
-	ExpiredAt               *time.Time
-	PaidAt                  *time.Time
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
-	DeletedAt               *time.Time
+	ID                     uuid.UUID
+	ReferenceID            string
+	CallerService          string
+	GatewayType            GatewayType
+	GatewayTransactionID   string
+	Status                 Status
+	Amount                 Money
+	PaymentMethodType      Method
+	CustomerInfo           CustomerInfo
+	Metadata               map[string]any
+	GatewayRequestPayload  map[string]any
+	GatewayResponsePayload map[string]any
+	Description            string
+	ExpiredAt              *time.Time
+	PaidAt                 *time.Time
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
+	DeletedAt              *time.Time
+
+	// Refunds is loaded by single-payment lookups (FindByID and friends), not by list queries.
+	Refunds []*Refund
+	// Version is the stored row version, used for optimistic locking on save.
+	Version int
 
 	events []DomainEvent
 }
@@ -114,11 +119,15 @@ func (p *Payment) MarkCompleted(paidAt time.Time) error {
 }
 
 // MarkFailed transitions to FAILED from any non-terminal state.
-func (p *Payment) MarkFailed(errorCode, errorMessage string) {
+func (p *Payment) MarkFailed(errorCode, errorMessage string) error {
+	if p.Status.IsTerminal() {
+		return apperror.InvalidState("cannot fail a payment that is already " + string(p.Status))
+	}
 	now := time.Now().UTC()
 	p.Status = StatusFailed
 	p.UpdatedAt = now
 	p.raise(PaymentFailed{PaymentID: p.ID, ErrorCode: errorCode, ErrorMessage: errorMessage, OccurredAt: now})
+	return nil
 }
 
 // MarkExpired transitions to EXPIRED from PENDING or INITIATED.

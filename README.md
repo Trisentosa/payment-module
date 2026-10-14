@@ -34,7 +34,14 @@ make migrate  # runs DB migrations
 make run      # go run ./cmd/server — restarts instantly on code changes
 ```
 
-The service is now reachable at `http://localhost:8080`.
+The service is now reachable at `http://localhost:8080`. Payment endpoints need a caller
+API key; `.env.example` configures a local-only one:
+
+```sh
+curl -H "Authorization: Bearer pgk_local-dev-only-do-not-use-in-prod" localhost:8080/payments
+```
+
+Issue real keys with `go run ./cmd/apikey <service-name>` (see [docs/security.md](docs/security.md)).
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -54,7 +61,10 @@ make test
 ```
 
 - **Domain unit tests** (`./internal/domain/...`) — no Docker required
-- **Postgres integration tests** (`./internal/adapter/outbound/postgres/...`) — use [`testcontainers-go`](https://testcontainers.com/), no `make up` required
+- **Postgres integration tests** (`./internal/adapter/outbound/postgres/...`, run with `make test-integration`) — use [`testcontainers-go`](https://testcontainers.com/), no `make up` required. Without Docker, point them at a throwaway database instead; it is wiped before every test:
+  ```sh
+  PAYGATE_TEST_DATABASE_URL="postgres://user@localhost:5432/paygate_test?sslmode=disable" make test-integration
+  ```
 
 ## Useful Commands
 

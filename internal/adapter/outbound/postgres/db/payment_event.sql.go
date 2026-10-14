@@ -12,6 +12,19 @@ import (
 	"github.com/google/uuid"
 )
 
+const getLastEventSequence = `-- name: GetLastEventSequence :one
+SELECT COALESCE(MAX(sequence_number), 0)::int AS last_sequence
+FROM payment_events
+WHERE aggregate_id = $1
+`
+
+func (q *Queries) GetLastEventSequence(ctx context.Context, aggregateID uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, getLastEventSequence, aggregateID)
+	var last_sequence int32
+	err := row.Scan(&last_sequence)
+	return last_sequence, err
+}
+
 const insertPaymentEvent = `-- name: InsertPaymentEvent :exec
 INSERT INTO payment_events (aggregate_id, aggregate_type, event_type, sequence_number, payload)
 VALUES ($1, 'PAYMENT', $2, $3, $4)

@@ -83,6 +83,7 @@ func main() {
 	// Repos
 	paymentRepo := postgresAdapter.NewPaymentRepo(pool, outboxWriter)
 	adminRepo := postgresAdapter.NewAdminRepo(pool)
+	attemptRecorder := postgresAdapter.NewAttemptRecorder(pool)
 
 	// Gateway
 	gatewayFactory := gateway.NewFactory(map[string]ports.GatewayPort{
@@ -94,10 +95,11 @@ func main() {
 	})
 
 	// Command handlers
-	createPaymentHandler := command.NewCreatePaymentHandler(paymentRepo, gatewayFactory, outboxWriter)
+	createPaymentHandler := command.NewCreatePaymentHandler(paymentRepo, gatewayFactory, attemptRecorder)
 	processCallbackHandler := command.NewProcessCallbackHandler(paymentRepo, gatewayFactory, redisClient)
-	cancelPaymentHandler := command.NewCancelPaymentHandler(paymentRepo, gatewayFactory)
+	cancelPaymentHandler := command.NewCancelPaymentHandler(paymentRepo, gatewayFactory, redisClient, attemptRecorder)
 	forceExpireHandler := command.NewForceExpireHandler(paymentRepo, redisClient)
+	refundPaymentHandler := command.NewRefundPaymentHandler(paymentRepo, gatewayFactory, redisClient, attemptRecorder)
 
 	// Query handlers
 	getPaymentHandler := query.NewGetPaymentHandler(paymentRepo, redisClient, redisAdapter.TTLForStatus)
@@ -108,6 +110,7 @@ func main() {
 	getEventsHandler := query.NewGetEventsHandler(adminRepo)
 	getRefundsHandler := query.NewGetRefundsHandler(adminRepo)
 	outboxStatsHandler := query.NewGetOutboxStatsHandler(adminRepo)
+	listRefundsHandler := query.NewListRefundsHandler(paymentRepo)
 
 	// Idempotency
 	idemService := httpMiddleware.NewIdempotencyService(redisClient, 24*time.Hour)
@@ -122,6 +125,7 @@ func main() {
 		listPaymentsHandler,
 	)
 	webhookHandler := httpAdapter.NewWebhookHandler(processCallbackHandler)
+	refundHandler := httpAdapter.NewRefundHandler(refundPaymentHandler, listRefundsHandler)
 	adminHandler := httpAdapter.NewAdminHandler(
 		adminListHandler,
 		getAttemptsHandler,
@@ -147,14 +151,19 @@ func main() {
 
 	mux.HandleFunc("GET /readyz", readyzHandler(pool, redisClient, mqPublisher))
 
-	// Write
-	mux.HandleFunc("POST /payments", paymentHandler.CreatePayment)
-	mux.HandleFunc("DELETE /payments/{id}", paymentHandler.CancelPayment)
+	// Caller API: every route requires a service API key (see cmd/apikey).
+	callerMux := http.NewServeMux()
+	callerMux.HandleFunc("POST /payments", paymentHandler.CreatePayment)
+	callerMux.HandleFunc("DELETE /payments/{id}", paymentHandler.CancelPayment)
+	callerMux.HandleFunc("POST /payments/{id}/refunds", refundHandler.CreateRefund)
+	callerMux.HandleFunc("GET /payments", paymentHandler.ListPayments)
+	callerMux.HandleFunc("GET /payments/{id}", paymentHandler.GetPayment)
+	callerMux.HandleFunc("GET /payments/ref/{reference_id}", paymentHandler.GetPaymentByRef)
+	callerMux.HandleFunc("GET /payments/{id}/refunds", refundHandler.ListRefunds)
 
-	// Read
-	mux.HandleFunc("GET /payments", paymentHandler.ListPayments)
-	mux.HandleFunc("GET /payments/{id}", paymentHandler.GetPayment)
-	mux.HandleFunc("GET /payments/ref/{reference_id}", paymentHandler.GetPaymentByRef)
+	callerProtected := httpMiddleware.CallerAuth(cfg.Callers.KeyHashes)(callerMux)
+	mux.Handle("/payments", callerProtected)
+	mux.Handle("/payments/", callerProtected)
 
 	// Webhooks
 	mux.HandleFunc("POST /webhooks/midtrans", webhookHandler.HandleMidtrans)
@@ -166,6 +175,7 @@ func main() {
 	adminMux.HandleFunc("GET /api/v1/admin/payments/{id}/attempts", adminHandler.ListPaymentAttempts)
 	adminMux.HandleFunc("GET /api/v1/admin/payments/{id}/events", adminHandler.ListPaymentEvents)
 	adminMux.HandleFunc("GET /api/v1/admin/payments/{id}/refunds", adminHandler.ListRefunds)
+	adminMux.HandleFunc("POST /api/v1/admin/payments/{id}/refunds", refundHandler.AdminCreateRefund)
 	adminMux.HandleFunc("POST /api/v1/admin/payments/{id}/expire", adminHandler.ForceExpire)
 	adminMux.HandleFunc("GET /api/v1/admin/outbox/stats", adminHandler.OutboxStats)
 
@@ -193,6 +203,8 @@ func main() {
 	// Background workers
 	go outboxWorker.Run(ctx)
 	go postgresAdapter.NewExpiryJob(paymentRepo, redisClient).Run(ctx)
+	// Settles charges and refunds whose gateway reply was lost.
+	go command.NewReconciler(paymentRepo, gatewayFactory, redisClient, attemptRecorder, command.ReconcileConfig{}).Run(ctx, time.Minute)
 
 	go func() {
 		log.Info("metrics server starting", "port", cfg.Server.MetricsPort)

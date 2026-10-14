@@ -3,7 +3,9 @@ INSERT INTO outbox_events (aggregate_id, event_type, payload)
 VALUES ($1, $2, $3);
 
 -- name: GetPendingOutboxEvents :many
-SELECT id, aggregate_id, event_type, payload, retry_count
+-- Run inside a transaction: the row locks are what keep other workers off these rows
+-- until this worker has published them and committed.
+SELECT id, aggregate_id, event_type, payload, retry_count, created_at
 FROM outbox_events
 WHERE status = 'PENDING'
   AND scheduled_at <= NOW()
@@ -22,5 +24,6 @@ UPDATE outbox_events
 SET status       = CASE WHEN retry_count >= 5 THEN 'FAILED' ELSE 'PENDING' END,
     retry_count  = retry_count + 1,
     last_error   = $2,
-    scheduled_at = NOW() + (retry_count * INTERVAL '30 seconds')
+    -- Back off 30s, 60s, 90s, ... (retry_count here is the value before this failure).
+    scheduled_at = NOW() + ((retry_count + 1) * INTERVAL '30 seconds')
 WHERE id = $1;

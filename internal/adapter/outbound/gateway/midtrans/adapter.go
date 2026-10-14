@@ -8,6 +8,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -45,6 +47,55 @@ type notification struct {
 	SignatureKey      string `json:"signature_key"`
 	TransactionStatus string `json:"transaction_status"`
 	FraudStatus       string `json:"fraud_status"`
+	// Refunds is present on refund / partial_refund notifications, one entry per refund.
+	Refunds []refundEntry `json:"refunds"`
+}
+
+type refundEntry struct {
+	RefundChargebackID flexString `json:"refund_chargeback_id"`
+	RefundAmount       flexString `json:"refund_amount"`
+	RefundKey          string     `json:"refund_key"`
+}
+
+// flexString accepts a JSON string or number. Midtrans documents refund_chargeback_id as a
+// string but sends a number, and sends amounts as decimal strings ("5000.00").
+type flexString string
+
+func (f *flexString) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		return nil
+	}
+	if len(b) > 0 && b[0] == '"' {
+		var s string
+		if err := json.Unmarshal(b, &s); err != nil {
+			return err
+		}
+		*f = flexString(s)
+		return nil
+	}
+	*f = flexString(b)
+	return nil
+}
+
+func toRefundNotifications(entries []refundEntry) []ports.RefundNotification {
+	out := make([]ports.RefundNotification, 0, len(entries))
+	for _, r := range entries {
+		out = append(out, ports.RefundNotification{
+			RefundKey:       r.RefundKey,
+			GatewayRefundID: string(r.RefundChargebackID),
+			Amount:          r.RefundAmount.amount(),
+		})
+	}
+	return out
+}
+
+// amount parses a Midtrans amount such as "5000.00" into whole currency units.
+func (f flexString) amount() int64 {
+	v, err := strconv.ParseFloat(string(f), 64)
+	if err != nil {
+		return 0
+	}
+	return int64(math.Round(v))
 }
 
 // ParseWebhook verifies Midtrans's body signature,
@@ -69,11 +120,14 @@ func (a *Adapter) ParseWebhook(payload []byte, _ map[string][]string) (*ports.We
 		return nil, apperror.InvalidInput("webhook missing transaction_id")
 	}
 
+	refunds := toRefundNotifications(n.Refunds)
+
 	return &ports.WebhookNotification{
 		PaymentID:            n.OrderID,
 		GatewayTransactionID: n.TransactionID,
 		Status:               mapTransactionStatus(n.TransactionStatus, n.FraudStatus),
 		GatewayStatus:        n.TransactionStatus,
+		Refunds:              refunds,
 	}, nil
 }
 
@@ -97,36 +151,95 @@ func mapTransactionStatus(status, fraudStatus string) ports.TransactionStatus {
 	}
 }
 
-func (a *Adapter) CancelTransaction(ctx context.Context, gatewayTxID string) error {
-	res, err := a.do(ctx, fmt.Sprintf("/v2/%s/cancel", gatewayTxID), nil)
-	if err != nil {
-		return apperror.GatewayError("midtrans cancel failed", err)
-	}
-	if res.failed() {
-		return apperror.GatewayError(fmt.Sprintf("midtrans cancel failed: %s %s", res.code, res.message()), nil)
+// unknownIfServerError marks a 5xx reply as an unknown outcome; Midtrans may have acted.
+func unknownIfServerError(res response) error {
+	if res.httpStatus >= 500 || strings.HasPrefix(res.code, "5") {
+		return ports.ErrUnknownOutcome
 	}
 	return nil
 }
 
-func (a *Adapter) GetTransactionStatus(ctx context.Context, gatewayTxID string) (string, error) {
-	resp, err := a.get(ctx, fmt.Sprintf("/v2/%s/status", gatewayTxID))
+func (a *Adapter) CancelTransaction(ctx context.Context, gatewayTxID string) error {
+	res, err := a.do(ctx, http.MethodPost, fmt.Sprintf("/v2/%s/cancel", gatewayTxID), nil)
 	if err != nil {
-		return "", apperror.GatewayError("midtrans status check failed", err)
-	}
-	status, _ := resp["transaction_status"].(string)
-	return status, nil
-}
-
-func (a *Adapter) CreateRefund(ctx context.Context, gatewayTxID string, amount int64, reason string) (string, error) {
-	body := map[string]any{"amount": amount, "reason": reason}
-	res, err := a.do(ctx, fmt.Sprintf("/v2/%s/refund", gatewayTxID), body)
-	if err != nil {
-		return "", apperror.GatewayError("midtrans refund failed", err)
+		return apperror.GatewayError("midtrans cancel failed", err)
 	}
 	if res.failed() {
-		return "", apperror.GatewayError(fmt.Sprintf("midtrans refund failed: %s %s", res.code, res.message()), nil)
+		return apperror.GatewayError(fmt.Sprintf("midtrans cancel failed: %s %s", res.code, res.message()), unknownIfServerError(res))
 	}
-	return fmt.Sprint(res.body["refund_chargeback_id"]), nil
+	return nil
+}
+
+// statusResponse holds the GET /v2/{id}/status fields PayGate reads.
+type statusResponse struct {
+	TransactionID     string        `json:"transaction_id"`
+	TransactionStatus string        `json:"transaction_status"`
+	FraudStatus       string        `json:"fraud_status"`
+	Refunds           []refundEntry `json:"refunds"`
+}
+
+// GetTransaction calls GET /v2/{id}/status, by transaction ID when known, otherwise by
+// order ID (PayGate's payment ID).
+func (a *Adapter) GetTransaction(ctx context.Context, ref ports.TransactionRef) (*ports.TransactionState, error) {
+	id := ref.GatewayTransactionID
+	if id == "" {
+		id = ref.PaymentID
+	}
+	res, err := a.do(ctx, http.MethodGet, fmt.Sprintf("/v2/%s/status", id), nil)
+	if err != nil {
+		return nil, apperror.GatewayError("midtrans status check failed", err)
+	}
+	if res.code == "404" || res.httpStatus == http.StatusNotFound {
+		// "Transaction doesn't exist."
+		return &ports.TransactionState{Found: false, RawResponse: res.body}, nil
+	}
+	if res.failed() {
+		return nil, apperror.GatewayError(fmt.Sprintf("midtrans status check failed: %s %s", res.code, res.message()), unknownIfServerError(res))
+	}
+
+	var sr statusResponse
+	if err := json.Unmarshal(res.raw, &sr); err != nil {
+		return nil, apperror.GatewayError("decode midtrans status", fmt.Errorf("%w: %v", ports.ErrUnknownOutcome, err))
+	}
+	return &ports.TransactionState{
+		Found:                true,
+		GatewayTransactionID: sr.TransactionID,
+		Status:               mapTransactionStatus(sr.TransactionStatus, sr.FraudStatus),
+		GatewayStatus:        sr.TransactionStatus,
+		Refunds:              toRefundNotifications(sr.Refunds),
+		RawResponse:          res.body,
+	}, nil
+}
+
+// CreateRefund calls POST /v2/{transaction_id}/refund. Midtrans deduplicates on refund_key,
+// so a retry after a lost reply can't refund twice.
+func (a *Adapter) CreateRefund(ctx context.Context, req ports.RefundRequest) (*ports.RefundResult, error) {
+	body := map[string]any{"refund_key": req.RefundKey, "amount": req.Amount}
+	if req.Reason != "" {
+		body["reason"] = req.Reason
+	}
+
+	res, err := a.do(ctx, http.MethodPost, fmt.Sprintf("/v2/%s/refund", req.GatewayTransactionID), body)
+	if err != nil {
+		return nil, apperror.GatewayError("midtrans refund: no usable reply", err)
+	}
+
+	switch {
+	case res.code == "200":
+		return &ports.RefundResult{Accepted: true, GatewayRefundID: fmt.Sprint(res.body["refund_chargeback_id"]), RawResponse: res.body}, nil
+	case res.code == "406":
+		// "Duplicate refund ID": an earlier attempt with this key may have gone through.
+		// Leave the outcome to the refund notification or the status check instead of guessing.
+		return nil, apperror.GatewayError("midtrans reports duplicate refund_key "+req.RefundKey, ports.ErrUnknownOutcome)
+	case res.httpStatus >= 500 || strings.HasPrefix(res.code, "5") || strings.HasPrefix(res.code, "2"):
+		return nil, apperror.GatewayError(fmt.Sprintf("midtrans refund outcome unknown: %s %s", res.code, res.message()), ports.ErrUnknownOutcome)
+	default:
+		// 4xx: Midtrans processed the request and refused it, e.g. 412 status can't be
+		// modified, 414 invalid amount. No money moved.
+		return &ports.RefundResult{
+			Accepted: false, DeclineReason: fmt.Sprintf("midtrans %s: %s", res.code, res.message()), RawResponse: res.body,
+		}, nil
+	}
 }
 
 // response is a decoded Midtrans reply. Midtrans often answers HTTP 200 and reports the
@@ -135,6 +248,7 @@ type response struct {
 	httpStatus int
 	code       string // body status_code, e.g. "201" pending, "200" success, "202" denied
 	body       map[string]any
+	raw        []byte
 }
 
 func (r response) message() string {
@@ -147,49 +261,43 @@ func (r response) failed() bool {
 	return r.httpStatus >= 400 || strings.HasPrefix(r.code, "4") || strings.HasPrefix(r.code, "5")
 }
 
-// do POSTs to Midtrans. An error means no usable reply arrived, so the outcome is unknown.
-func (a *Adapter) do(ctx context.Context, path string, body map[string]any) (response, error) {
-	b, err := json.Marshal(body)
-	if err != nil {
-		return response{}, err
+// do calls Midtrans. An error means no usable reply arrived, so the outcome is unknown;
+// it wraps ports.ErrUnknownOutcome.
+func (a *Adapter) do(ctx context.Context, method, path string, body map[string]any) (response, error) {
+	var reqBody io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return response{}, err
+		}
+		reqBody = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.BaseURL+path, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(ctx, method, a.cfg.BaseURL+path, reqBody)
 	if err != nil {
 		return response{}, err
 	}
 	req.SetBasicAuth(a.cfg.ServerKey, "")
-	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
 
 	res, err := a.client.Do(req)
 	if err != nil {
-		return response{}, err
+		return response{}, fmt.Errorf("%w: %v", ports.ErrUnknownOutcome, err)
 	}
 	defer func() { _ = res.Body.Close() }()
 
 	out := response{httpStatus: res.StatusCode}
-	if err = json.NewDecoder(res.Body).Decode(&out.body); err != nil {
-		return response{}, fmt.Errorf("decode midtrans HTTP %d response: %w", res.StatusCode, err)
+	if out.raw, err = io.ReadAll(io.LimitReader(res.Body, 1<<20)); err != nil {
+		return response{}, fmt.Errorf("%w: read midtrans HTTP %d response: %v", ports.ErrUnknownOutcome, res.StatusCode, err)
+	}
+	if err = json.Unmarshal(out.raw, &out.body); err != nil {
+		return response{}, fmt.Errorf("%w: decode midtrans HTTP %d response: %v", ports.ErrUnknownOutcome, res.StatusCode, err)
 	}
 	out.code, _ = out.body["status_code"].(string)
 	if out.code == "" {
 		out.code = strconv.Itoa(res.StatusCode)
 	}
-	return out, nil
-}
-
-func (a *Adapter) get(ctx context.Context, path string) (map[string]any, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.cfg.BaseURL+path, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.SetBasicAuth(a.cfg.ServerKey, "")
-	res, err := a.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = res.Body.Close() }()
-	var out map[string]any
-	_ = json.NewDecoder(res.Body).Decode(&out)
 	return out, nil
 }

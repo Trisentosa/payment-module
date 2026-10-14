@@ -10,6 +10,9 @@
 | `INVALID_STATE` | 422 | State transition not allowed |
 | `GATEWAY_ERROR` | 502 | External gateway call failed |
 | `IDEMPOTENCY_CONFLICT` | 409 | Same idempotency key with a different payload, or an identical request still in progress |
+| `UNAUTHORIZED` | 401 | Missing or invalid API key (caller) or admin key |
+| `FORBIDDEN` | 403 | Authenticated, but the request claims a different identity (X-Service-Name mismatch) |
+| `CONFLICT` | 409 | A concurrent write changed the resource first; reload and retry |
 | `INTERNAL_ERROR` | 500 | Unexpected internal failure |
 
 ## Usage by Layer

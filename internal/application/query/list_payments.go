@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
+	"github.com/Trisentosa/payment-module/internal/pkg/apperror"
 )
 
 type ListPaymentsQuery struct {
@@ -30,10 +31,11 @@ func NewListPaymentsHandler(repo payment.Repository) *ListPaymentsHandler {
 }
 
 func (h *ListPaymentsHandler) Handle(ctx context.Context, q ListPaymentsQuery) (*ListPaymentsResult, error) {
-	limit := q.Limit
-	if limit <= 0 || limit > 100 {
-		limit = 50
+	// An empty caller would list every service's payments.
+	if q.CallerService == "" {
+		return nil, apperror.InvalidInput("caller_service is required")
 	}
+	limit := clampLimit(q.Limit, 50)
 
 	payments, err := h.repo.ListPaginated(ctx, payment.ListFilter{
 		Status:        q.Status,
@@ -60,4 +62,18 @@ func (h *ListPaymentsHandler) Handle(ctx context.Context, q ListPaymentsQuery) (
 	}
 
 	return &ListPaymentsResult{Payments: dtos, NextCursor: nextCursor}, nil
+}
+
+// maxPageSize caps list pages. Larger requests get the maximum, not the default.
+const maxPageSize = 100
+
+func clampLimit(requested, def int) int {
+	switch {
+	case requested <= 0:
+		return def
+	case requested > maxPageSize:
+		return maxPageSize
+	default:
+		return requested
+	}
 }

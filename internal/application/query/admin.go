@@ -31,10 +31,7 @@ func NewAdminListPaymentsHandler(repo payment.Repository) *AdminListPaymentsHand
 }
 
 func (h *AdminListPaymentsHandler) Handle(ctx context.Context, q AdminListPaymentsQuery) (*ListPaymentsResult, error) {
-	limit := q.Limit
-	if limit <= 0 || limit > 100 {
-		limit = 20
-	}
+	limit := clampLimit(q.Limit, 20)
 
 	payments, err := h.repo.ListPaginated(ctx, payment.ListFilter{
 		Status:        q.Status,
@@ -68,9 +65,12 @@ func (h *AdminListPaymentsHandler) Handle(ctx context.Context, q AdminListPaymen
 
 type PaymentAttemptDTO struct {
 	ID                   string `json:"id"`
+	Operation            string `json:"operation"`
+	RefundID             string `json:"refund_id,omitempty"`
 	AttemptNumber        int32  `json:"attempt_number"`
 	Status               string `json:"status"`
 	ErrorCode            string `json:"error_code,omitempty"`
+	ErrorMessage         string `json:"error_message,omitempty"`
 	GatewayTransactionID string `json:"gateway_transaction_id,omitempty"`
 	DurationMs           int64  `json:"duration_ms,omitempty"`
 	CreatedAt            string `json:"created_at"`
@@ -91,15 +91,21 @@ func (h *GetAttemptsHandler) Handle(ctx context.Context, q GetAttemptsQuery) ([]
 	}
 	dtos := make([]PaymentAttemptDTO, 0, len(rows))
 	for _, r := range rows {
-		dtos = append(dtos, PaymentAttemptDTO{
+		dto := PaymentAttemptDTO{
 			ID:                   r.ID.String(),
+			Operation:            r.Operation,
 			AttemptNumber:        r.AttemptNumber,
 			Status:               r.Status,
 			ErrorCode:            r.ErrorCode,
+			ErrorMessage:         r.ErrorMessage,
 			GatewayTransactionID: r.GatewayTransactionID,
 			DurationMs:           r.DurationMs,
 			CreatedAt:            r.CreatedAt.UTC().Format(time.RFC3339),
-		})
+		}
+		if r.RefundID != nil {
+			dto.RefundID = r.RefundID.String()
+		}
+		dtos = append(dtos, dto)
 	}
 	return dtos, nil
 }

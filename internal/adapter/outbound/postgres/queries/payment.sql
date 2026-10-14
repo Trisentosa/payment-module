@@ -2,7 +2,7 @@
 SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
        status, amount, currency, payment_method_type,
        customer_info, metadata, gateway_request_payload, gateway_response_payload,
-       description, expired_at, paid_at, created_at, updated_at, deleted_at
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 FROM payments
 WHERE id = $1 AND deleted_at IS NULL;
 
@@ -10,7 +10,7 @@ WHERE id = $1 AND deleted_at IS NULL;
 SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
        status, amount, currency, payment_method_type,
        customer_info, metadata, gateway_request_payload, gateway_response_payload,
-       description, expired_at, paid_at, created_at, updated_at, deleted_at
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 FROM payments
 WHERE reference_id = $1 AND caller_service = $2 AND deleted_at IS NULL;
 
@@ -18,7 +18,7 @@ WHERE reference_id = $1 AND caller_service = $2 AND deleted_at IS NULL;
 SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
        status, amount, currency, payment_method_type,
        customer_info, metadata, gateway_request_payload, gateway_response_payload,
-       description, expired_at, paid_at, created_at, updated_at, deleted_at
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 FROM payments
 WHERE gateway_transaction_id = $1 AND deleted_at IS NULL;
 
@@ -26,9 +26,9 @@ WHERE gateway_transaction_id = $1 AND deleted_at IS NULL;
 SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
        status, amount, currency, payment_method_type,
        customer_info, metadata, gateway_request_payload, gateway_response_payload,
-       description, expired_at, paid_at, created_at, updated_at, deleted_at
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 FROM payments
-WHERE status IN ('PENDING', 'INITIATED')
+WHERE status = 'PENDING'
   AND expired_at < NOW()
   AND deleted_at IS NULL
 LIMIT $1;
@@ -46,11 +46,27 @@ INSERT INTO payments (
 -- name: UpdatePaymentStatus :exec
 UPDATE payments SET status = $1, updated_at = NOW() WHERE id = $2;
 
--- name: UpdatePaymentFull :exec
+-- name: UpdatePaymentFull :execrows
+-- Succeeds only if the row still has the version the caller loaded; 0 rows means a
+-- concurrent write won and the caller must reload.
 UPDATE payments
 SET gateway_transaction_id   = $2,
     status                   = $3,
     gateway_response_payload = $4,
     paid_at                  = $5,
-    updated_at               = $6
-WHERE id = $1;
+    updated_at               = $6,
+    version                  = version + 1
+WHERE id = $1 AND version = $7;
+
+-- name: GetPaymentsAwaitingChargeOutcome :many
+-- INITIATED payments are ones whose charge call ended without a usable answer.
+SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
+       status, amount, currency, payment_method_type,
+       customer_info, metadata, gateway_request_payload, gateway_response_payload,
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
+FROM payments
+WHERE status = 'INITIATED'
+  AND created_at < $1
+  AND deleted_at IS NULL
+ORDER BY created_at
+LIMIT $2;

@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -36,13 +37,13 @@ type CreatePaymentResult struct {
 }
 
 type CreatePaymentHandler struct {
-	repo    payment.Repository
-	factory ports.GatewayFactory
-	outbox  ports.OutboxWriter
+	repo     payment.Repository
+	factory  ports.GatewayFactory
+	attempts ports.AttemptRecorder
 }
 
-func NewCreatePaymentHandler(repo payment.Repository, factory ports.GatewayFactory, outbox ports.OutboxWriter) *CreatePaymentHandler {
-	return &CreatePaymentHandler{repo: repo, factory: factory, outbox: outbox}
+func NewCreatePaymentHandler(repo payment.Repository, factory ports.GatewayFactory, attempts ports.AttemptRecorder) *CreatePaymentHandler {
+	return &CreatePaymentHandler{repo: repo, factory: factory, attempts: attempts}
 }
 
 func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentCommand) (*CreatePaymentResult, error) {
@@ -99,34 +100,41 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 
 	log.Info("calling gateway", "gateway", cmd.GatewayType, "payment_id", p.ID)
 
+	started := time.Now()
 	gwResp, err := gw.CreateTransaction(ctx, ports.CreateTransactionRequest{
-		PaymentID:         p.ID.String(),
-		ReferenceID:       cmd.ReferenceID,
-		Amount:            cmd.Amount,
-		Currency:          cmd.Currency,
-		PaymentMethod:     method,
-		BankCode:          cmd.BankCode,
-		CardToken:         cmd.CardToken,
-		ReturnURL:         cmd.ReturnURL,
-		CustomerName:      cmd.CustomerName,
-		CustomerEmail:     cmd.CustomerEmail,
-		CustomerPhone:     cmd.CustomerPhone,
-		Description:       cmd.Description,
-		ExpiredAt:         cmd.ExpiredAt,
-		Metadata:          cmd.Metadata,
+		PaymentID:     p.ID.String(),
+		ReferenceID:   cmd.ReferenceID,
+		Amount:        cmd.Amount,
+		Currency:      cmd.Currency,
+		PaymentMethod: method,
+		BankCode:      cmd.BankCode,
+		CardToken:     cmd.CardToken,
+		ReturnURL:     cmd.ReturnURL,
+		CustomerName:  cmd.CustomerName,
+		CustomerEmail: cmd.CustomerEmail,
+		CustomerPhone: cmd.CustomerPhone,
+		Description:   cmd.Description,
+		ExpiredAt:     cmd.ExpiredAt,
+		Metadata:      cmd.Metadata,
 	})
 	if apperror.IsCode(err, apperror.CodeInvalidInput) {
 		// The gateway refused the request's contents before creating anything. Nothing is
-		// stored, so the caller can fix the request and retry with the same reference.
+		// stored (not even an attempt), so the caller can fix the request and retry with
+		// the same reference.
 		return nil, err
 	}
+	attempt := ports.Attempt{PaymentID: p.ID, Operation: ports.OperationCharge, Duration: time.Since(started)}
 	if err != nil {
-		p.MarkFailed("GATEWAY_ERROR", err.Error())
-		if saveErr := h.repo.Save(ctx, p); saveErr != nil {
-			log.Warn("failed to record gateway failure", "payment_id", p.ID, "err", saveErr)
-		}
-		return nil, err
+		recordAttempt(ctx, h.attempts, failedAttempt(attempt, err))
+		return nil, h.chargeFailed(ctx, p, err)
 	}
+	attempt.Outcome = ports.AttemptSucceeded
+	attempt.GatewayTransactionID = gwResp.GatewayTransactionID
+	attempt.GatewayResponse = gwResp.RawResponse
+	if gwResp.Status == ports.TransactionFailed {
+		attempt.Outcome, attempt.ErrorCode = ports.AttemptFailed, "DECLINED"
+	}
+	recordAttempt(ctx, h.attempts, attempt)
 
 	if err = p.MarkPending(gwResp.GatewayTransactionID, gwResp.RawResponse); err != nil {
 		return nil, err
@@ -139,7 +147,9 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 			return nil, err
 		}
 	case ports.TransactionFailed:
-		p.MarkFailed("DECLINED", "declined by gateway at charge time")
+		if err = p.MarkFailed("DECLINED", "declined by gateway at charge time"); err != nil {
+			return nil, err
+		}
 	}
 
 	if err = h.repo.Save(ctx, p); err != nil {
@@ -152,4 +162,28 @@ func (h *CreatePaymentHandler) Handle(ctx context.Context, cmd CreatePaymentComm
 		Payment:    p,
 		NextAction: gwResp.NextAction,
 	}, nil
+}
+
+// chargeFailed stores the payment after a charge call that returned an error, and builds
+// the caller's error. When the gateway may still have taken the charge (a timeout, a 5xx),
+// the payment stays INITIATED and the reconciler asks the gateway what happened; marking
+// it FAILED here could hide a card that was actually charged.
+func (h *CreatePaymentHandler) chargeFailed(ctx context.Context, p *payment.Payment, err error) error {
+	log := logger.FromContext(ctx)
+
+	if errors.Is(err, ports.ErrUnknownOutcome) {
+		if saveErr := h.repo.Save(ctx, p); saveErr != nil {
+			log.Error("charge outcome unknown and payment not stored; check the gateway for order_id", "payment_id", p.ID, "err", saveErr)
+			return err
+		}
+		log.Warn("charge outcome unknown; payment left INITIATED for reconciliation", "payment_id", p.ID, "err", err)
+		return apperror.GatewayError(fmt.Sprintf(
+			"the gateway did not confirm the charge; payment %s will be reconciled shortly, check GET /payments/%s", p.ID, p.ID), err)
+	}
+
+	_ = p.MarkFailed("GATEWAY_ERROR", err.Error()) // INITIATED, so this can't be refused
+	if saveErr := h.repo.Save(ctx, p); saveErr != nil {
+		log.Warn("failed to record gateway failure", "payment_id", p.ID, "err", saveErr)
+	}
+	return err
 }

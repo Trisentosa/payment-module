@@ -3,6 +3,9 @@ package command_test
 import (
 	"context"
 	"testing"
+	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/Trisentosa/payment-module/internal/application/command"
 	"github.com/Trisentosa/payment-module/internal/application/ports"
@@ -26,6 +29,16 @@ func pendingPayment(t *testing.T, ref, gatewayTxID string) *payment.Payment {
 	return p
 }
 
+// stored reads a payment back from the fake repo, which keeps its own copy.
+func stored(t *testing.T, repo *fake.PaymentRepo, id uuid.UUID) *payment.Payment {
+	t.Helper()
+	p, err := repo.FindByID(context.Background(), id)
+	if err != nil {
+		t.Fatalf("FindByID: %v", err)
+	}
+	return p
+}
+
 func callbackHandler(repo *fake.PaymentRepo, gw *fake.Gateway, cache *fake.Cache) *command.ProcessCallbackHandler {
 	return command.NewProcessCallbackHandler(repo, fake.GatewayFactory{"MIDTRANS": gw}, cache)
 }
@@ -44,6 +57,7 @@ func TestProcessCallback_SettlementCompletesPayment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
+	p = stored(t, repo, p.ID)
 
 	if p.Status != payment.StatusCompleted {
 		t.Errorf("status: got %s, want COMPLETED", p.Status)
@@ -70,6 +84,7 @@ func TestProcessCallback_FailureStatusFailsPayment(t *testing.T) {
 	if err := callbackHandler(repo, gw, fake.NewCache()).Handle(ctx, command.ProcessCallbackCommand{GatewayType: "MIDTRANS"}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
+	p = stored(t, repo, p.ID)
 	if p.Status != payment.StatusFailed {
 		t.Errorf("status: got %s, want FAILED", p.Status)
 	}
@@ -86,6 +101,7 @@ func TestProcessCallback_PendingStatusChangesNothing(t *testing.T) {
 	if err := callbackHandler(repo, gw, fake.NewCache()).Handle(ctx, command.ProcessCallbackCommand{GatewayType: "MIDTRANS"}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
+	p = stored(t, repo, p.ID)
 	if p.Status != payment.StatusPending || repo.SaveCalls != 0 {
 		t.Errorf("expected no change: status=%s saves=%d", p.Status, repo.SaveCalls)
 	}
@@ -118,6 +134,7 @@ func TestProcessCallback_FindsPaymentByEchoedPaymentID(t *testing.T) {
 	if err := callbackHandler(repo, gw, fake.NewCache()).Handle(ctx, command.ProcessCallbackCommand{GatewayType: "MIDTRANS"}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
+	p = stored(t, repo, p.ID)
 	if p.Status != payment.StatusCompleted {
 		t.Errorf("status: got %s, want COMPLETED", p.Status)
 	}
@@ -135,6 +152,7 @@ func TestProcessCallback_LegacyOrderIDFallsBackToTransactionID(t *testing.T) {
 	if err := callbackHandler(repo, gw, fake.NewCache()).Handle(ctx, command.ProcessCallbackCommand{GatewayType: "MIDTRANS"}); err != nil {
 		t.Fatalf("Handle: %v", err)
 	}
+	p = stored(t, repo, p.ID)
 	if p.Status != payment.StatusCompleted {
 		t.Errorf("status: got %s, want COMPLETED", p.Status)
 	}
@@ -150,5 +168,87 @@ func TestProcessCallback_UnknownPaymentIsNotFound(t *testing.T) {
 	err := callbackHandler(repo, gw, fake.NewCache()).Handle(ctx, command.ProcessCallbackCommand{GatewayType: "MIDTRANS"})
 	if !apperror.IsCode(err, apperror.CodeNotFound) {
 		t.Fatalf("expected NOT_FOUND, got %v", err)
+	}
+}
+
+// pendingRefundPayment returns a completed payment with one PENDING refund of 40000, stored in repo.
+func pendingRefundPayment(t *testing.T) (*fake.PaymentRepo, *payment.Payment, *payment.Refund) {
+	t.Helper()
+	p := pendingPayment(t, "ORDER-RF", "gw-tx-rf")
+	_ = p.MarkCompleted(time.Now())
+	r, err := p.RequestRefund("rf-1", 40000, "", "order-service")
+	if err != nil {
+		t.Fatalf("RequestRefund: %v", err)
+	}
+	return fake.NewPaymentRepo(p), p, r
+}
+
+func TestProcessCallback_RefundNotificationCompletesPendingRefund(t *testing.T) {
+	ctx := context.Background()
+	repo, p, r := pendingRefundPayment(t)
+	gw := &fake.Gateway{Notification: &ports.WebhookNotification{
+		PaymentID: p.ID.String(), GatewayTransactionID: "gw-tx-rf",
+		Status: ports.TransactionUnknown, GatewayStatus: "partial_refund",
+		Refunds: []ports.RefundNotification{{RefundKey: r.ID.String(), GatewayRefundID: "7", Amount: 40000}},
+	}}
+
+	if err := callbackHandler(repo, gw, fake.NewCache()).Handle(ctx, command.ProcessCallbackCommand{GatewayType: "MIDTRANS"}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	got := stored(t, repo, p.ID)
+	if got.Refund(r.ID).Status != payment.RefundStatusSucceeded || got.Refund(r.ID).GatewayRefundID != "7" {
+		t.Errorf("refund: %+v", got.Refund(r.ID))
+	}
+	if got.Status != payment.StatusPartiallyRefunded {
+		t.Errorf("payment status: got %s, want PARTIALLY_REFUNDED", got.Status)
+	}
+}
+
+func TestProcessCallback_RefundNotificationLeavesUnknownAndMismatchedAlone(t *testing.T) {
+	ctx := context.Background()
+	repo, p, r := pendingRefundPayment(t)
+	gw := &fake.Gateway{Notification: &ports.WebhookNotification{
+		PaymentID: p.ID.String(), Status: ports.TransactionUnknown, GatewayStatus: "partial_refund",
+		Refunds: []ports.RefundNotification{
+			{RefundKey: "dashboard-refund", GatewayRefundID: "8", Amount: 1000}, // not requested through PayGate
+			{RefundKey: r.ID.String(), GatewayRefundID: "9", Amount: 39000},     // amount disagrees with ours
+		},
+	}}
+
+	if err := callbackHandler(repo, gw, fake.NewCache()).Handle(ctx, command.ProcessCallbackCommand{GatewayType: "MIDTRANS"}); err != nil {
+		t.Fatalf("Handle: %v", err)
+	}
+	got := stored(t, repo, p.ID)
+	if got.Refund(r.ID).Status != payment.RefundStatusPending || got.Status != payment.StatusCompleted {
+		t.Errorf("expected nothing applied: refund=%s payment=%s", got.Refund(r.ID).Status, got.Status)
+	}
+	if repo.SaveCalls != 0 {
+		t.Errorf("saved %d times, want 0", repo.SaveCalls)
+	}
+}
+
+func TestProcessCallback_LateNotificationsDontReopenCancelledPayment(t *testing.T) {
+	for _, n := range []ports.WebhookNotification{
+		{Status: ports.TransactionFailed, GatewayStatus: "cancel"}, // Midtrans confirming our own cancel
+		{Status: ports.TransactionFailed, GatewayStatus: "expire"},
+		{Status: ports.TransactionSettled, GatewayStatus: "settlement"}, // the customer paid just after cancelling
+	} {
+		t.Run(n.GatewayStatus, func(t *testing.T) {
+			ctx := context.Background()
+			p := pendingPayment(t, "ORDER-C", "gw-tx-c")
+			if err := p.Cancel(); err != nil {
+				t.Fatalf("Cancel: %v", err)
+			}
+			repo := fake.NewPaymentRepo(p)
+			n.PaymentID, n.GatewayTransactionID = p.ID.String(), "gw-tx-c"
+			gw := &fake.Gateway{Notification: &n}
+
+			if err := callbackHandler(repo, gw, fake.NewCache()).Handle(ctx, command.ProcessCallbackCommand{GatewayType: "MIDTRANS"}); err != nil {
+				t.Fatalf("Handle: %v", err)
+			}
+			if got := stored(t, repo, p.ID).Status; got != payment.StatusCancelled {
+				t.Errorf("status: got %s, want CANCELLED", got)
+			}
+		})
 	}
 }

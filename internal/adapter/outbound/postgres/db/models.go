@@ -54,6 +54,7 @@ type Payment struct {
 	CreatedAt              pgtype.Timestamptz
 	UpdatedAt              pgtype.Timestamptz
 	DeletedAt              *time.Time
+	Version                int32
 }
 
 type PaymentAttempt struct {
@@ -69,6 +70,8 @@ type PaymentAttempt struct {
 	HttpStatusCode       pgtype.Int4
 	DurationMs           pgtype.Int8
 	CreatedAt            pgtype.Timestamptz
+	Operation            string
+	RefundID             pgtype.UUID
 }
 
 type PaymentEvent struct {
@@ -94,4 +97,7 @@ type Refund struct {
 	CreatedAt              pgtype.Timestamptz
 	UpdatedAt              pgtype.Timestamptz
 	DeletedAt              *time.Time
+	FailureReason          pgtype.Text
+	RequestedBy            string
+	CompletedAt            *time.Time
 }
