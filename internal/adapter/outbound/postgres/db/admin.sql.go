@@ -50,25 +50,44 @@ func (q *Queries) GetOutboxStats(ctx context.Context) ([]GetOutboxStatsRow, erro
 }
 
 const getPaymentAttemptsByPayment = `-- name: GetPaymentAttemptsByPayment :many
-SELECT id, payment_id, gateway_transaction_id, attempt_number, status, error_code, error_message,
-       gateway_request, gateway_response, http_status_code, duration_ms, created_at
+SELECT id, payment_id, refund_id, operation, gateway_transaction_id, attempt_number, status,
+       error_code, error_message, gateway_request, gateway_response, http_status_code, duration_ms, created_at
 FROM payment_attempts
 WHERE payment_id = $1
 ORDER BY attempt_number ASC
 `
 
-func (q *Queries) GetPaymentAttemptsByPayment(ctx context.Context, paymentID uuid.UUID) ([]PaymentAttempt, error) {
+type GetPaymentAttemptsByPaymentRow struct {
+	ID                   uuid.UUID
+	PaymentID            uuid.UUID
+	RefundID             pgtype.UUID
+	Operation            string
+	GatewayTransactionID *string
+	AttemptNumber        int32
+	Status               string
+	ErrorCode            *string
+	ErrorMessage         pgtype.Text
+	GatewayRequest       []byte
+	GatewayResponse      []byte
+	HttpStatusCode       pgtype.Int4
+	DurationMs           pgtype.Int8
+	CreatedAt            pgtype.Timestamptz
+}
+
+func (q *Queries) GetPaymentAttemptsByPayment(ctx context.Context, paymentID uuid.UUID) ([]GetPaymentAttemptsByPaymentRow, error) {
 	rows, err := q.db.Query(ctx, getPaymentAttemptsByPayment, paymentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []PaymentAttempt
+	var items []GetPaymentAttemptsByPaymentRow
 	for rows.Next() {
-		var i PaymentAttempt
+		var i GetPaymentAttemptsByPaymentRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.PaymentID,
+			&i.RefundID,
+			&i.Operation,
 			&i.GatewayTransactionID,
 			&i.AttemptNumber,
 			&i.Status,

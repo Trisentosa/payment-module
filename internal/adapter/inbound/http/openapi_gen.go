@@ -14,6 +14,51 @@ const (
 	CallerKeyScopes callerKeyContextKey = "CallerKey.Scopes"
 )
 
+// Defines values for AdminAttemptOperation.
+const (
+	CANCEL AdminAttemptOperation = "CANCEL"
+	CHARGE AdminAttemptOperation = "CHARGE"
+	REFUND AdminAttemptOperation = "REFUND"
+	STATUS AdminAttemptOperation = "STATUS"
+)
+
+// Valid indicates whether the value is a known member of the AdminAttemptOperation enum.
+func (e AdminAttemptOperation) Valid() bool {
+	switch e {
+	case CANCEL:
+		return true
+	case CHARGE:
+		return true
+	case REFUND:
+		return true
+	case STATUS:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AdminAttemptStatus.
+const (
+	AdminAttemptStatusFAILED    AdminAttemptStatus = "FAILED"
+	AdminAttemptStatusSUCCEEDED AdminAttemptStatus = "SUCCEEDED"
+	AdminAttemptStatusUNKNOWN   AdminAttemptStatus = "UNKNOWN"
+)
+
+// Valid indicates whether the value is a known member of the AdminAttemptStatus enum.
+func (e AdminAttemptStatus) Valid() bool {
+	switch e {
+	case AdminAttemptStatusFAILED:
+		return true
+	case AdminAttemptStatusSUCCEEDED:
+		return true
+	case AdminAttemptStatusUNKNOWN:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for AdminForceExpireResponseStatus.
 const (
 	AdminForceExpireResponseStatusEXPIRED AdminForceExpireResponseStatus = "EXPIRED"
@@ -70,13 +115,13 @@ func (e AdminPaymentStatus) Valid() bool {
 
 // Defines values for CancelPaymentResponseStatus.
 const (
-	CancelPaymentResponseStatusCANCELLED CancelPaymentResponseStatus = "CANCELLED"
+	CANCELLED CancelPaymentResponseStatus = "CANCELLED"
 )
 
 // Valid indicates whether the value is a known member of the CancelPaymentResponseStatus enum.
 func (e CancelPaymentResponseStatus) Valid() bool {
 	switch e {
-	case CancelPaymentResponseStatusCANCELLED:
+	case CANCELLED:
 		return true
 	default:
 		return false
@@ -242,16 +287,34 @@ func (e RefundStatus) Valid() bool {
 	}
 }
 
-// AdminAttempt Single gateway attempt record
+// AdminAttempt One outbound gateway call made for the payment
 type AdminAttempt struct {
-	AttemptNumber        int32              `json:"attempt_number"`
-	CreatedAt            time.Time          `json:"created_at"`
-	DurationMs           *int64             `json:"duration_ms,omitempty"`
-	ErrorCode            *string            `json:"error_code,omitempty"`
-	GatewayTransactionID *string            `json:"gateway_transaction_id,omitempty"`
-	ID                   openapi_types.UUID `json:"id"`
-	Status               string             `json:"status"`
+	// AttemptNumber Counts this payment's gateway calls from 1
+	AttemptNumber        int32                 `json:"attempt_number"`
+	CreatedAt            time.Time             `json:"created_at"`
+	DurationMs           *int64                `json:"duration_ms,omitempty"`
+	ErrorCode            *string               `json:"error_code,omitempty"`
+	ErrorMessage         *string               `json:"error_message,omitempty"`
+	GatewayTransactionID *string               `json:"gateway_transaction_id,omitempty"`
+	ID                   openapi_types.UUID    `json:"id"`
+	Operation            AdminAttemptOperation `json:"operation"`
+
+	// RefundID Set for REFUND calls, and for STATUS checks made to settle a refund
+	RefundID *openapi_types.UUID `json:"refund_id,omitempty"`
+
+	// Status SUCCEEDED: the gateway answered and did what was asked.
+	// FAILED: the gateway answered no, or the request was invalid.
+	// UNKNOWN: no usable answer (timeout, 5xx); the call may or may not have taken effect.
+	Status AdminAttemptStatus `json:"status"`
 }
+
+// AdminAttemptOperation defines model for AdminAttempt.Operation.
+type AdminAttemptOperation string
+
+// AdminAttemptStatus SUCCEEDED: the gateway answered and did what was asked.
+// FAILED: the gateway answered no, or the request was invalid.
+// UNKNOWN: no usable answer (timeout, 5xx); the call may or may not have taken effect.
+type AdminAttemptStatus string
 
 // AdminAttemptsResponse defines model for AdminAttemptsResponse.
 type AdminAttemptsResponse struct {

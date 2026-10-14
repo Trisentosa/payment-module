@@ -300,6 +300,16 @@ paths:
           $ref: "#/components/responses/Conflict"
         "500":
           $ref: "#/components/responses/InternalError"
+        "502":
+          description: |
+            The gateway failed. If it gave no usable answer (timeout), the payment is kept as
+            INITIATED and settled by reconciliation within minutes; the message names the
+            payment ID to poll with GET /payments/{id}. Retrying with the same reference_id
+            returns 409 with that payment.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /payments/{id}:
     delete:
@@ -530,22 +540,39 @@ components:
 
     AdminAttempt:
       type: object
-      description: Single gateway attempt record
-      required: [id, attempt_number, status, created_at]
+      description: One outbound gateway call made for the payment
+      required: [id, operation, attempt_number, status, created_at]
       properties:
         id:
           type: string
           format: uuid
           x-go-name: ID
+        operation:
+          type: string
+          enum: [CHARGE, CANCEL, REFUND, STATUS]
+        refund_id:
+          type: string
+          format: uuid
+          x-go-name: RefundID
+          description: Set for REFUND calls, and for STATUS checks made to settle a refund
         attempt_number:
           type: integer
           format: int32
           x-go-name: AttemptNumber
+          description: Counts this payment's gateway calls from 1
         status:
           type: string
+          enum: [SUCCEEDED, FAILED, UNKNOWN]
+          description: |
+            SUCCEEDED: the gateway answered and did what was asked.
+            FAILED: the gateway answered no, or the request was invalid.
+            UNKNOWN: no usable answer (timeout, 5xx); the call may or may not have taken effect.
         error_code:
           type: string
           x-go-name: ErrorCode
+        error_message:
+          type: string
+          x-go-name: ErrorMessage
         gateway_transaction_id:
           type: string
           x-go-name: GatewayTransactionID

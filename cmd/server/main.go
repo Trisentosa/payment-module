@@ -83,6 +83,7 @@ func main() {
 	// Repos
 	paymentRepo := postgresAdapter.NewPaymentRepo(pool, outboxWriter)
 	adminRepo := postgresAdapter.NewAdminRepo(pool)
+	attemptRecorder := postgresAdapter.NewAttemptRecorder(pool)
 
 	// Gateway
 	gatewayFactory := gateway.NewFactory(map[string]ports.GatewayPort{
@@ -94,11 +95,11 @@ func main() {
 	})
 
 	// Command handlers
-	createPaymentHandler := command.NewCreatePaymentHandler(paymentRepo, gatewayFactory, outboxWriter)
+	createPaymentHandler := command.NewCreatePaymentHandler(paymentRepo, gatewayFactory, attemptRecorder)
 	processCallbackHandler := command.NewProcessCallbackHandler(paymentRepo, gatewayFactory, redisClient)
-	cancelPaymentHandler := command.NewCancelPaymentHandler(paymentRepo, gatewayFactory, redisClient)
+	cancelPaymentHandler := command.NewCancelPaymentHandler(paymentRepo, gatewayFactory, redisClient, attemptRecorder)
 	forceExpireHandler := command.NewForceExpireHandler(paymentRepo, redisClient)
-	refundPaymentHandler := command.NewRefundPaymentHandler(paymentRepo, gatewayFactory, redisClient)
+	refundPaymentHandler := command.NewRefundPaymentHandler(paymentRepo, gatewayFactory, redisClient, attemptRecorder)
 
 	// Query handlers
 	getPaymentHandler := query.NewGetPaymentHandler(paymentRepo, redisClient, redisAdapter.TTLForStatus)
@@ -202,6 +203,8 @@ func main() {
 	// Background workers
 	go outboxWorker.Run(ctx)
 	go postgresAdapter.NewExpiryJob(paymentRepo, redisClient).Run(ctx)
+	// Settles charges and refunds whose gateway reply was lost.
+	go command.NewReconciler(paymentRepo, gatewayFactory, redisClient, attemptRecorder, command.ReconcileConfig{}).Run(ctx, time.Minute)
 
 	go func() {
 		log.Info("metrics server starting", "port", cfg.Server.MetricsPort)

@@ -29,11 +29,12 @@ func paidPayment(t *testing.T, method payment.Method) *payment.Payment {
 }
 
 type refundHarness struct {
-	repo  *fake.PaymentRepo
-	gw    *fake.Gateway
-	cache *fake.Cache
-	h     *command.RefundPaymentHandler
-	p     *payment.Payment
+	repo     *fake.PaymentRepo
+	gw       *fake.Gateway
+	cache    *fake.Cache
+	attempts *fake.AttemptRecorder
+	h        *command.RefundPaymentHandler
+	p        *payment.Payment
 }
 
 func newRefundHarness(t *testing.T, method payment.Method) *refundHarness {
@@ -46,8 +47,10 @@ func newRefundHarness(t *testing.T, method payment.Method) *refundHarness {
 		payment.MethodShopeePay:      {Charge: true, Refund: true},
 	}}
 	c := fake.NewCache()
+	att := &fake.AttemptRecorder{}
 	return &refundHarness{repo: repo, gw: gw, cache: c, p: p,
-		h: command.NewRefundPaymentHandler(repo, fake.GatewayFactory{"MIDTRANS": gw}, c)}
+		attempts: att,
+		h:        command.NewRefundPaymentHandler(repo, fake.GatewayFactory{"MIDTRANS": gw}, c, att)}
 }
 
 func (rh *refundHarness) refund(ref string, amount int64) (*command.RefundPaymentResult, error) {

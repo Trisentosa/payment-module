@@ -13,6 +13,40 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getPaymentIDsWithPendingRefunds = `-- name: GetPaymentIDsWithPendingRefunds :many
+SELECT DISTINCT payment_id
+FROM refunds
+WHERE status = 'PENDING'
+  AND created_at < $1
+  AND deleted_at IS NULL
+LIMIT $2
+`
+
+type GetPaymentIDsWithPendingRefundsParams struct {
+	CreatedAt pgtype.Timestamptz
+	Limit     int32
+}
+
+func (q *Queries) GetPaymentIDsWithPendingRefunds(ctx context.Context, arg GetPaymentIDsWithPendingRefundsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, getPaymentIDsWithPendingRefunds, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var payment_id uuid.UUID
+		if err := rows.Scan(&payment_id); err != nil {
+			return nil, err
+		}
+		items = append(items, payment_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRefundsByPayment = `-- name: ListRefundsByPayment :many
 SELECT id, payment_id, reference_id, gateway_refund_id, status, amount, reason,
        failure_reason, requested_by, created_at, updated_at, completed_at

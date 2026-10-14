@@ -62,7 +62,7 @@ func newHarness() *harness {
 	get := query.NewGetPaymentHandler(repo, c, func(payment.Status) time.Duration { return time.Minute })
 	h := httpAdapter.NewPaymentHandler(
 		command.NewCreatePaymentHandler(repo, factory, nil),
-		command.NewCancelPaymentHandler(repo, factory, c),
+		command.NewCancelPaymentHandler(repo, factory, c, &fake.AttemptRecorder{}),
 		middleware.NewIdempotencyService(c, time.Hour),
 		get,
 		query.NewGetByRefHandler(repo, c, get),

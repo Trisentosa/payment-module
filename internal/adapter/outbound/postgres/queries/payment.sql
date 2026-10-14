@@ -28,7 +28,7 @@ SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
        customer_info, metadata, gateway_request_payload, gateway_response_payload,
        description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 FROM payments
-WHERE status IN ('PENDING', 'INITIATED')
+WHERE status = 'PENDING'
   AND expired_at < NOW()
   AND deleted_at IS NULL
 LIMIT $1;
@@ -57,3 +57,16 @@ SET gateway_transaction_id   = $2,
     updated_at               = $6,
     version                  = version + 1
 WHERE id = $1 AND version = $7;
+
+-- name: GetPaymentsAwaitingChargeOutcome :many
+-- INITIATED payments are ones whose charge call ended without a usable answer.
+SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
+       status, amount, currency, payment_method_type,
+       customer_info, metadata, gateway_request_payload, gateway_response_payload,
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
+FROM payments
+WHERE status = 'INITIATED'
+  AND created_at < $1
+  AND deleted_at IS NULL
+ORDER BY created_at
+LIMIT $2;

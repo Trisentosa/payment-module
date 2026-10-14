@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/Trisentosa/payment-module/internal/adapter/outbound/postgres/db"
 	"github.com/Trisentosa/payment-module/internal/application/ports"
@@ -410,4 +411,46 @@ func toRefundParams(rf *payment.Refund) db.UpsertRefundParams {
 		UpdatedAt:       pgtype.Timestamptz{Time: rf.UpdatedAt, Valid: true},
 		CompletedAt:     rf.CompletedAt,
 	}
+}
+
+// FindAwaitingChargeOutcome returns INITIATED payments created before cutoff: their charge
+// call ended without a usable answer, so only the gateway knows what happened.
+func (r *PaymentRepo) FindAwaitingChargeOutcome(ctx context.Context, cutoff time.Time, limit int) ([]*payment.Payment, error) {
+	rows, err := r.q.GetPaymentsAwaitingChargeOutcome(ctx, db.GetPaymentsAwaitingChargeOutcomeParams{
+		CreatedAt: pgtype.Timestamptz{Time: cutoff, Valid: true},
+		Limit:     int32(limit),
+	})
+	if err != nil {
+		return nil, apperror.Internal("query payments awaiting charge outcome", err)
+	}
+	out := make([]*payment.Payment, 0, len(rows))
+	for _, row := range rows {
+		p, err := toDomain(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// FindWithPendingRefunds returns payments (refunds loaded) that have a refund still PENDING
+// since before cutoff.
+func (r *PaymentRepo) FindWithPendingRefunds(ctx context.Context, cutoff time.Time, limit int) ([]*payment.Payment, error) {
+	ids, err := r.q.GetPaymentIDsWithPendingRefunds(ctx, db.GetPaymentIDsWithPendingRefundsParams{
+		CreatedAt: pgtype.Timestamptz{Time: cutoff, Valid: true},
+		Limit:     int32(limit),
+	})
+	if err != nil {
+		return nil, apperror.Internal("query payments with pending refunds", err)
+	}
+	out := make([]*payment.Payment, 0, len(ids))
+	for _, id := range ids {
+		p, err := r.FindByID(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
 }

@@ -26,4 +26,9 @@ type Repository interface {
 	FindExpired(ctx context.Context, limit int) ([]*Payment, error)
 	ListPaginated(ctx context.Context, f ListFilter) ([]*Payment, error)
 	UpdateStatus(ctx context.Context, id uuid.UUID, status Status, fields map[string]any) error
+	// FindAwaitingChargeOutcome returns INITIATED payments created before cutoff, whose
+	// charge outcome is unknown.
+	FindAwaitingChargeOutcome(ctx context.Context, cutoff time.Time, limit int) ([]*Payment, error)
+	// FindWithPendingRefunds returns payments with a refund PENDING since before cutoff.
+	FindWithPendingRefunds(ctx context.Context, cutoff time.Time, limit int) ([]*Payment, error)
 }

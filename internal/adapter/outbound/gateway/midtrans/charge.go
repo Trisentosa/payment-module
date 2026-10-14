@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"net/http"
 	"strings"
 	"time"
 
@@ -42,7 +43,7 @@ func (a *Adapter) CreateTransaction(ctx context.Context, req ports.CreateTransac
 		return nil, err
 	}
 
-	res, err := a.do(ctx, "/v2/charge", body)
+	res, err := a.do(ctx, http.MethodPost, "/v2/charge", body)
 	if err != nil {
 		return nil, apperror.GatewayError("midtrans charge failed", err)
 	}
@@ -52,7 +53,7 @@ func (a *Adapter) CreateTransaction(ctx context.Context, req ports.CreateTransac
 		// Midtrans validated the request and refused it; nothing was created.
 		return nil, apperror.InvalidInput(fmt.Sprintf("midtrans rejected the charge: %s %v", res.message(), res.body["validation_messages"]))
 	case res.failed():
-		return nil, apperror.GatewayError(fmt.Sprintf("midtrans charge failed: %s %s", res.code, res.message()), nil)
+		return nil, apperror.GatewayError(fmt.Sprintf("midtrans charge failed: %s %s", res.code, res.message()), unknownIfServerError(res))
 	}
 
 	txID, _ := res.body["transaction_id"].(string)

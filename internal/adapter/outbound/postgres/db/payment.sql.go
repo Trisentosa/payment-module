@@ -20,7 +20,7 @@ SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
        customer_info, metadata, gateway_request_payload, gateway_response_payload,
        description, expired_at, paid_at, created_at, updated_at, deleted_at, version
 FROM payments
-WHERE status IN ('PENDING', 'INITIATED')
+WHERE status = 'PENDING'
   AND expired_at < NOW()
   AND deleted_at IS NULL
 LIMIT $1
@@ -181,6 +181,66 @@ func (q *Queries) GetPaymentByReference(ctx context.Context, arg GetPaymentByRef
 		&i.Version,
 	)
 	return i, err
+}
+
+const getPaymentsAwaitingChargeOutcome = `-- name: GetPaymentsAwaitingChargeOutcome :many
+SELECT id, reference_id, caller_service, gateway_type, gateway_transaction_id,
+       status, amount, currency, payment_method_type,
+       customer_info, metadata, gateway_request_payload, gateway_response_payload,
+       description, expired_at, paid_at, created_at, updated_at, deleted_at, version
+FROM payments
+WHERE status = 'INITIATED'
+  AND created_at < $1
+  AND deleted_at IS NULL
+ORDER BY created_at
+LIMIT $2
+`
+
+type GetPaymentsAwaitingChargeOutcomeParams struct {
+	CreatedAt pgtype.Timestamptz
+	Limit     int32
+}
+
+// INITIATED payments are ones whose charge call ended without a usable answer.
+func (q *Queries) GetPaymentsAwaitingChargeOutcome(ctx context.Context, arg GetPaymentsAwaitingChargeOutcomeParams) ([]Payment, error) {
+	rows, err := q.db.Query(ctx, getPaymentsAwaitingChargeOutcome, arg.CreatedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Payment
+	for rows.Next() {
+		var i Payment
+		if err := rows.Scan(
+			&i.ID,
+			&i.ReferenceID,
+			&i.CallerService,
+			&i.GatewayType,
+			&i.GatewayTransactionID,
+			&i.Status,
+			&i.Amount,
+			&i.Currency,
+			&i.PaymentMethodType,
+			&i.CustomerInfo,
+			&i.Metadata,
+			&i.GatewayRequestPayload,
+			&i.GatewayResponsePayload,
+			&i.Description,
+			&i.ExpiredAt,
+			&i.PaidAt,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.DeletedAt,
+			&i.Version,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const insertPayment = `-- name: InsertPayment :execrows

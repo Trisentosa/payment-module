@@ -52,6 +52,17 @@ func (h *ProcessCallbackHandler) Handle(ctx context.Context, cmd ProcessCallback
 		return err
 	}
 
+	// INITIATED means the charge reply was lost. A final status from the gateway settles
+	// it; first record the transaction the charge created. A "pending" notification is
+	// left for the reconciler, because the caller never got the payment instructions.
+	if p.Status == payment.StatusInitiated && n.GatewayTransactionID != "" &&
+		(n.Status == ports.TransactionSettled || n.Status == ports.TransactionFailed) {
+		if err = p.MarkPending(n.GatewayTransactionID, nil); err != nil {
+			return err
+		}
+		changed = true
+	}
+
 	// Refund notifications arrive for COMPLETED payments, which the status switch below
 	// must leave alone: a "refund" status is not a payment failure.
 	if !p.Status.IsTerminal() {

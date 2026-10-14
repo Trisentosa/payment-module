@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"time"
 
 	"github.com/Trisentosa/payment-module/internal/application/ports"
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
@@ -16,13 +17,14 @@ type CancelPaymentCommand struct {
 }
 
 type CancelPaymentHandler struct {
-	repo    payment.Repository
-	factory ports.GatewayFactory
-	cache   ports.CachePort
+	repo     payment.Repository
+	factory  ports.GatewayFactory
+	cache    ports.CachePort
+	attempts ports.AttemptRecorder
 }
 
-func NewCancelPaymentHandler(repo payment.Repository, factory ports.GatewayFactory, cache ports.CachePort) *CancelPaymentHandler {
-	return &CancelPaymentHandler{repo: repo, factory: factory, cache: cache}
+func NewCancelPaymentHandler(repo payment.Repository, factory ports.GatewayFactory, cache ports.CachePort, attempts ports.AttemptRecorder) *CancelPaymentHandler {
+	return &CancelPaymentHandler{repo: repo, factory: factory, cache: cache, attempts: attempts}
 }
 
 func (h *CancelPaymentHandler) Handle(ctx context.Context, cmd CancelPaymentCommand) error {
@@ -43,9 +45,15 @@ func (h *CancelPaymentHandler) Handle(ctx context.Context, cmd CancelPaymentComm
 
 	gw, err := h.factory.Get(string(p.GatewayType))
 	if err == nil && p.GatewayTransactionID != "" {
-		if cancelErr := gw.CancelTransaction(ctx, p.GatewayTransactionID); cancelErr != nil {
+		started := time.Now()
+		cancelErr := gw.CancelTransaction(ctx, p.GatewayTransactionID)
+		attempt := ports.Attempt{PaymentID: p.ID, Operation: ports.OperationCancel,
+			GatewayTransactionID: p.GatewayTransactionID, Duration: time.Since(started), Outcome: ports.AttemptSucceeded}
+		if cancelErr != nil {
+			attempt = failedAttempt(attempt, cancelErr)
 			log.Warn("gateway cancel failed, continuing with local cancel", "payment_id", p.ID, "err", cancelErr)
 		}
+		recordAttempt(ctx, h.attempts, attempt)
 	}
 
 	if err = h.repo.Save(ctx, p); err != nil {

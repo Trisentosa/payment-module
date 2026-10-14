@@ -94,6 +94,59 @@ func (r *PaymentRepo) FindByGatewayTransactionID(_ context.Context, gatewayTxID 
 	return nil, apperror.NotFound("payment not found for gateway tx: " + gatewayTxID)
 }
 
+func (r *PaymentRepo) FindAwaitingChargeOutcome(_ context.Context, cutoff time.Time, limit int) ([]*payment.Payment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []*payment.Payment
+	for _, p := range r.byID {
+		if p.Status == payment.StatusInitiated && p.CreatedAt.Before(cutoff) && len(out) < limit {
+			out = append(out, clone(p))
+		}
+	}
+	return out, nil
+}
+
+func (r *PaymentRepo) FindWithPendingRefunds(_ context.Context, cutoff time.Time, limit int) ([]*payment.Payment, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []*payment.Payment
+	for _, p := range r.byID {
+		for _, rf := range p.Refunds {
+			if rf.Status == payment.RefundStatusPending && rf.CreatedAt.Before(cutoff) && len(out) < limit {
+				out = append(out, clone(p))
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
+// AttemptRecorder keeps attempts in memory.
+type AttemptRecorder struct {
+	mu       sync.Mutex
+	Attempts []ports.Attempt
+}
+
+func (a *AttemptRecorder) Record(_ context.Context, at ports.Attempt) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.Attempts = append(a.Attempts, at)
+	return nil
+}
+
+// Of returns the recorded attempts of one operation, in order.
+func (a *AttemptRecorder) Of(op ports.GatewayOperation) []ports.Attempt {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	var out []ports.Attempt
+	for _, at := range a.Attempts {
+		if at.Operation == op {
+			out = append(out, at)
+		}
+	}
+	return out
+}
+
 // clone copies a payment and its refunds so callers can't change stored state by accident.
 func clone(p *payment.Payment) *payment.Payment {
 	c := *p
@@ -150,6 +203,13 @@ type Gateway struct {
 	RefundErr    error               // set to simulate an unknown outcome
 	// OnRefund runs inside CreateRefund, e.g. to simulate a refund notification racing the reply.
 	OnRefund func(ports.RefundRequest)
+
+	StatusCalls []ports.TransactionRef
+	State       *ports.TransactionState // nil means "not found"
+	StateErr    error
+
+	CancelCalls []string
+	CancelErr   error
 }
 
 func (g *Gateway) CreateTransaction(context.Context, ports.CreateTransactionRequest) (*ports.GatewayResponse, error) {
@@ -178,8 +238,25 @@ func (g *Gateway) Capability(method payment.Method) ports.MethodCapability {
 	return g.Capabilities[method]
 }
 
-func (g *Gateway) GetTransactionStatus(context.Context, string) (string, error) { return "", nil }
-func (g *Gateway) CancelTransaction(context.Context, string) error              { return nil }
+func (g *Gateway) GetTransaction(_ context.Context, ref ports.TransactionRef) (*ports.TransactionState, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.StatusCalls = append(g.StatusCalls, ref)
+	if g.StateErr != nil {
+		return nil, g.StateErr
+	}
+	if g.State != nil {
+		return g.State, nil
+	}
+	return &ports.TransactionState{Found: false}, nil
+}
+
+func (g *Gateway) CancelTransaction(_ context.Context, gatewayTxID string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.CancelCalls = append(g.CancelCalls, gatewayTxID)
+	return g.CancelErr
+}
 func (g *Gateway) CreateRefund(_ context.Context, req ports.RefundRequest) (*ports.RefundResult, error) {
 	g.mu.Lock()
 	g.RefundCalls = append(g.RefundCalls, req)

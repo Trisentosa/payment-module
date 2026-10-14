@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/Trisentosa/payment-module/internal/domain/payment"
@@ -71,6 +72,29 @@ type RefundResult struct {
 	Accepted        bool
 	GatewayRefundID string
 	DeclineReason   string // set when Accepted is false
+	RawResponse     map[string]any
+}
+
+// ErrUnknownOutcome marks a gateway error after which the call may or may not have taken
+// effect: a timeout, a dropped connection, a 5xx. Adapters wrap such errors with it, and
+// callers check errors.Is(err, ErrUnknownOutcome) before treating a call as failed.
+var ErrUnknownOutcome = errors.New("gateway outcome unknown")
+
+// TransactionRef identifies a transaction to look up. GatewayTransactionID is used when
+// known; otherwise PaymentID (which PayGate sends as the gateway's order ID).
+type TransactionRef struct {
+	PaymentID            string
+	GatewayTransactionID string
+}
+
+// TransactionState is the gateway's current view of a transaction.
+type TransactionState struct {
+	Found                bool
+	GatewayTransactionID string
+	Status               TransactionStatus
+	GatewayStatus        string
+	Refunds              []RefundNotification // refunds the gateway has completed on it
+	RawResponse          map[string]any
 }
 
 // TransactionStatus is a gateway-neutral view of a transaction's state.
@@ -106,7 +130,9 @@ type GatewayPort interface {
 	// Capability reports what this gateway supports for a payment method.
 	Capability(method payment.Method) MethodCapability
 	CreateTransaction(ctx context.Context, req CreateTransactionRequest) (*GatewayResponse, error)
-	GetTransactionStatus(ctx context.Context, gatewayTxID string) (string, error)
+	// GetTransaction asks the gateway where a transaction stands. A transaction the gateway
+	// has never seen returns Found=false and a nil error.
+	GetTransaction(ctx context.Context, ref TransactionRef) (*TransactionState, error)
 	CancelTransaction(ctx context.Context, gatewayTxID string) error
 	// CreateRefund asks the gateway to refund a settled transaction. A nil error means the
 	// gateway answered: Accepted says whether it refunded. A non-nil error means the outcome

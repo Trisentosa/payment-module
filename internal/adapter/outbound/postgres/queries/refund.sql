@@ -18,3 +18,11 @@ SET gateway_refund_id = EXCLUDED.gateway_refund_id,
     failure_reason    = EXCLUDED.failure_reason,
     updated_at        = EXCLUDED.updated_at,
     completed_at      = EXCLUDED.completed_at;
+
+-- name: GetPaymentIDsWithPendingRefunds :many
+SELECT DISTINCT payment_id
+FROM refunds
+WHERE status = 'PENDING'
+  AND created_at < $1
+  AND deleted_at IS NULL
+LIMIT $2;

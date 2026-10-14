@@ -37,7 +37,7 @@ func newRefundAPI(t *testing.T) *refundAPI {
 	repo := fake.NewPaymentRepo(p)
 	gw := &fake.Gateway{}
 	h := httpAdapter.NewRefundHandler(
-		command.NewRefundPaymentHandler(repo, fake.GatewayFactory{"MIDTRANS": gw}, fake.NewCache()),
+		command.NewRefundPaymentHandler(repo, fake.GatewayFactory{"MIDTRANS": gw}, fake.NewCache(), &fake.AttemptRecorder{}),
 		query.NewListRefundsHandler(repo),
 	)
 	mux := http.NewServeMux()

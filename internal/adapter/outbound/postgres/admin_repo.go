@@ -27,9 +27,15 @@ func (r *AdminRepo) GetPaymentAttempts(ctx context.Context, paymentID uuid.UUID)
 	for _, row := range rows {
 		a := ports.AttemptRow{
 			ID:            row.ID,
+			Operation:     row.Operation,
 			AttemptNumber: row.AttemptNumber,
 			Status:        row.Status,
+			ErrorMessage:  row.ErrorMessage.String,
 			CreatedAt:     row.CreatedAt.Time,
+		}
+		if row.RefundID.Valid {
+			id := uuid.UUID(row.RefundID.Bytes)
+			a.RefundID = &id
 		}
 		if row.ErrorCode != nil {
 			a.ErrorCode = *row.ErrorCode

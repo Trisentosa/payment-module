@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -28,13 +29,14 @@ type RefundPaymentResult struct {
 }
 
 type RefundPaymentHandler struct {
-	repo    payment.Repository
-	factory ports.GatewayFactory
-	cache   ports.CachePort
+	repo     payment.Repository
+	factory  ports.GatewayFactory
+	cache    ports.CachePort
+	attempts ports.AttemptRecorder
 }
 
-func NewRefundPaymentHandler(repo payment.Repository, factory ports.GatewayFactory, cache ports.CachePort) *RefundPaymentHandler {
-	return &RefundPaymentHandler{repo: repo, factory: factory, cache: cache}
+func NewRefundPaymentHandler(repo payment.Repository, factory ports.GatewayFactory, cache ports.CachePort, attempts ports.AttemptRecorder) *RefundPaymentHandler {
+	return &RefundPaymentHandler{repo: repo, factory: factory, cache: cache, attempts: attempts}
 }
 
 // Handle refunds a completed payment through its gateway. The refund is stored as PENDING
@@ -94,12 +96,7 @@ func (h *RefundPaymentHandler) Handle(ctx context.Context, cmd RefundPaymentComm
 	}
 	ports.DropCachedPayment(ctx, h.cache, p)
 
-	res, err := gw.CreateRefund(ctx, ports.RefundRequest{
-		GatewayTransactionID: p.GatewayTransactionID,
-		RefundKey:            r.ID.String(),
-		Amount:               amount,
-		Reason:               cmd.Reason,
-	})
+	res, err := callRefund(ctx, gw, h.attempts, p, r)
 	if err != nil {
 		log.Warn("refund outcome unknown; left PENDING for the gateway's refund notification",
 			"payment_id", p.ID, "refund_id", r.ID, "err", err)
@@ -144,4 +141,32 @@ func (h *RefundPaymentHandler) saveOutcome(ctx context.Context, p *payment.Payme
 		return nil, err
 	}
 	return fresh, h.repo.Save(ctx, fresh)
+}
+
+// callRefund asks the gateway to refund r, keyed by r's ID, and records the call.
+func callRefund(ctx context.Context, gw ports.GatewayPort, rec ports.AttemptRecorder, p *payment.Payment, r *payment.Refund) (*ports.RefundResult, error) {
+	started := time.Now()
+	res, err := gw.CreateRefund(ctx, ports.RefundRequest{
+		GatewayTransactionID: p.GatewayTransactionID,
+		RefundKey:            r.ID.String(),
+		Amount:               r.Amount,
+		Reason:               r.Reason,
+	})
+
+	refundID := r.ID
+	attempt := ports.Attempt{PaymentID: p.ID, RefundID: &refundID, Operation: ports.OperationRefund,
+		GatewayTransactionID: p.GatewayTransactionID, Duration: time.Since(started)}
+	switch {
+	case err != nil:
+		// The port's contract: any CreateRefund error leaves the outcome unknown.
+		attempt = failedAttempt(attempt, err)
+		attempt.Outcome = ports.AttemptUnknown
+	case res.Accepted:
+		attempt.Outcome, attempt.GatewayResponse = ports.AttemptSucceeded, res.RawResponse
+	default:
+		attempt.Outcome, attempt.GatewayResponse = ports.AttemptFailed, res.RawResponse
+		attempt.ErrorCode, attempt.ErrorMessage = "DECLINED", res.DeclineReason
+	}
+	recordAttempt(ctx, rec, attempt)
+	return res, err
 }

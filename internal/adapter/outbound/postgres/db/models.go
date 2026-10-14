@@ -70,6 +70,8 @@ type PaymentAttempt struct {
 	HttpStatusCode       pgtype.Int4
 	DurationMs           pgtype.Int8
 	CreatedAt            pgtype.Timestamptz
+	Operation            string
+	RefundID             pgtype.UUID
 }
 
 type PaymentEvent struct {
