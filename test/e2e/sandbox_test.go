@@ -6,13 +6,15 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
 )
 
-// The sandbox drill: real transactions against the Midtrans sandbox. A person pays in
-// Midtrans's simulators when asked; everything else is automated. Each scenario checks
+// The sandbox drill: real transactions against the Midtrans sandbox. Virtual accounts and
+// ShopeePay are paid through Midtrans's simulators automatically (simulator_test.go); the
+// rest, and everything with SANDBOX_MANUAL=1, waits for a person to pay when asked. Each scenario checks
 // PayGate's API, its events, and Midtrans's own status API for the same transaction.
 //
 // Run all of it with `make sandbox`, or one scenario with
@@ -34,6 +36,20 @@ func action(t *testing.T, lines ...string) {
 		fmt.Println("    " + l)
 	}
 	fmt.Printf("    Waiting up to %s for Midtrans's notification...\n\n", humanWait())
+}
+
+// payOrAsk pays through the simulator when pay is given and SANDBOX_MANUAL isn't set;
+// otherwise it asks the person, with lines saying how.
+func payOrAsk(t *testing.T, pay func() error, lines ...string) {
+	t.Helper()
+	if pay != nil && os.Getenv("SANDBOX_MANUAL") == "" {
+		if err := pay(); err != nil {
+			t.Fatalf("paying through the simulator: %v (SANDBOX_MANUAL=1 pays by hand)", err)
+		}
+		t.Log("paid through the Midtrans simulator")
+		return
+	}
+	action(t, lines...)
 }
 
 func needWebhooks(t *testing.T) {
@@ -91,6 +107,16 @@ func refund(t *testing.T, id, reference string, amount int64) (string, map[strin
 	res := r.JSON(t)
 	status := str(res, "refund.status")
 	t.Logf("refund %s: %s %s", reference, status, str(res, "refund.failure_reason"))
+
+	// Midtrans refunds from the merchant's payable balance. A sandbox account with none
+	// declines every refund (414); PayGate must still record that cleanly.
+	if status == "FAILED" && strings.Contains(str(res, "refund.failure_reason"), "insufficient funds") {
+		if str(res, "payment.status") == "REFUNDED" || num(res, "payment.refundable_amount") == 0 {
+			t.Errorf("a declined refund must leave the amount refundable: %v", res)
+		}
+		t.Skipf("Midtrans declined the refund for lack of merchant balance (%s); PayGate recorded it correctly. "+
+			"Refunds can be tested once the sandbox account has a payable balance.", str(res, "refund.failure_reason"))
+	}
 
 	if status == "SUCCEEDED" {
 		gw := gatewayStatus(t, id)
@@ -173,19 +199,36 @@ func TestSandbox_CardDeclined(t *testing.T) {
 
 // ---- scenarios where a person pays in the simulator ----
 
-func TestSandbox_VirtualAccountBCA_PaidNotRefundable(t *testing.T) {
+func TestSandbox_VirtualAccount_PaidNotRefundable(t *testing.T) {
 	needWebhooks(t)
-	p := create(t, paymentRequest(ref("SBX-BCA"), "VIRTUAL_ACCOUNT", 50000, map[string]any{"bank_code": "BCA"}))
-	id := str(p, "payment_id")
-	action(t, "Pay this BCA virtual account in the simulator:",
-		"  https://simulator.sandbox.midtrans.com/bca/va/index",
-		"  VA number: "+str(p, "next_action.va_number")+"   amount: Rp50.000")
-	waitPaid(t, id, "COMPLETED")
-	expectGatewayStatus(t, id, 30*time.Second, "settlement")
-	events.WaitFor(t, id, "payment.completed")
+	simulators := map[string]string{
+		"bca":     "https://simulator.sandbox.midtrans.com/bca/va/index",
+		"bni":     "https://simulator.sandbox.midtrans.com/bni/va/index",
+		"permata": "https://simulator.sandbox.midtrans.com/openapi/va/index?bank=permata",
+		"bri":     "https://simulator.sandbox.midtrans.com/openapi/va/index?bank=bri",
+	}
+	for _, bank := range []string{"bca", "bni", "permata", "bri"} {
+		t.Run(bank, func(t *testing.T) {
+			p := create(t, paymentRequest(ref("SBX-VA-"+bank), "VIRTUAL_ACCOUNT", 50000, map[string]any{"bank_code": strings.ToUpper(bank)}))
+			id, va := str(p, "payment_id"), str(p, "next_action.va_number")
+			if str(p, "next_action.bank") != bank || va == "" {
+				t.Fatalf("VA instructions: %v", p)
+			}
+			payOrAsk(t, func() error { return newSimulator().payVA(bank, va) },
+				"Pay this "+strings.ToUpper(bank)+" virtual account in the simulator:",
+				"  "+simulators[bank],
+				"  VA number: "+va+"   amount: Rp50.000")
+			waitPaid(t, id, "COMPLETED")
+			expectGatewayStatus(t, id, 30*time.Second, "settlement")
+			completed := events.WaitFor(t, id, "payment.completed")
+			if completed.Data["paid_at"] == nil {
+				t.Errorf("payment.completed without paid_at: %v", completed.Data)
+			}
 
-	expect(t, call(t, http.MethodPost, "/payments/"+id+"/refunds", orderKey, map[string]any{"reference_id": ref("SBX-BCA-RF")}),
-		http.StatusUnprocessableEntity, "VA refund")
+			expect(t, call(t, http.MethodPost, "/payments/"+id+"/refunds", orderKey, map[string]any{"reference_id": ref("SBX-VA-RF-" + bank)}),
+				http.StatusUnprocessableEntity, "VA refund")
+		})
+	}
 }
 
 func TestSandbox_QRIS_PartialRefunds(t *testing.T) {
@@ -240,9 +283,9 @@ func TestSandbox_ShopeePay_FullRefundOnly(t *testing.T) {
 	needWebhooks(t)
 	p := create(t, paymentRequest(ref("SBX-SPAY"), "SHOPEEPAY", 35000, map[string]any{"return_url": "https://example.com/return"}))
 	id := str(p, "payment_id")
-	action(t, "Pay with ShopeePay in the deeplink simulator:",
-		"  https://simulator.sandbox.midtrans.com/v2/deeplink/index",
-		"  deeplink: "+str(p, "next_action.redirect_url"))
+	payOrAsk(t, func() error { return newSimulator().payShopeePay(str(p, "next_action.redirect_url")) },
+		"Pay with ShopeePay: open this link and confirm with PIN 123456:",
+		"  "+str(p, "next_action.redirect_url"))
 	waitPaid(t, id, "COMPLETED")
 	expectGatewayStatus(t, id, 30*time.Second, "settlement")
 

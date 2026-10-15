@@ -89,9 +89,15 @@ every rule.
 
 `make sandbox` runs the same harness against the **real Midtrans sandbox** (tag
 `sandbox`, `test/e2e/sandbox_test.go`). It creates real sandbox transactions of every
-method, pauses with exact instructions when a person must pay in Midtrans's simulator
-(VA number, QR image URL, 3DS link with OTP `112233`), waits for Midtrans's real
-notification, then refunds or cancels and checks PayGate against Midtrans's own status API.
+method, pays them, waits for Midtrans's real notification, then refunds or cancels and
+checks PayGate against Midtrans's own status API.
+
+Paying is automated where Midtrans's simulator allows it. The simulators are plain HTML
+forms with no API, and `simulator_test.go` submits them like a browser: virtual accounts
+(BCA, BNI, Permata, BRI) and ShopeePay (PIN `123456`). Cards need a real browser for 3-D
+Secure 2, so the drill prints the link and waits for you to enter OTP `112233`. QRIS and
+GoPay are manual too until their simulator works for the account. `SANDBOX_MANUAL=1` makes
+every payment manual, e.g. if Midtrans changes the simulator pages.
 
 Setup, once:
 
@@ -110,9 +116,12 @@ make sandbox SANDBOX_RUN=TestSandbox_QRIS     # one scenario
 SANDBOX_NO_WEBHOOKS=1 make sandbox            # no tunnel: only the scenarios no one pays in
 ```
 
-`SANDBOX_WAIT` (default `10m`) is how long each step waits for you. Card refunds may be
-declined until Midtrans settles the capture (next day in production); the drill then
-checks that PayGate recorded the decline cleanly.
+`SANDBOX_WAIT` (default `10m`) is how long each step waits for a payment.
+
+Midtrans refunds from the merchant's payable balance. A sandbox account without one
+declines every refund with `414 merchant insufficient funds`; the drill then checks that
+PayGate recorded the decline cleanly and skips the rest of that scenario. Card refunds may
+also be declined until Midtrans settles the capture (next day in production).
 
 ## Writing Tests
 
