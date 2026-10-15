@@ -350,3 +350,21 @@ func TestCapability_FollowsMidtransRefundRules(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateTransaction_OverridesNotificationURL(t *testing.T) {
+	for _, configured := range []string{"", "https://tunnel.example/webhooks/midtrans"} {
+		var got []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got = r.Header.Values("X-Override-Notification")
+			_, _ = w.Write([]byte(`{"status_code":"201","transaction_id":"tx-1","transaction_status":"pending"}`))
+		}))
+		a := midtrans.NewAdapter(midtrans.Config{ServerKey: serverKey, BaseURL: srv.URL, Timeout: 5 * time.Second, NotificationURL: configured})
+		if _, err := a.CreateTransaction(context.Background(), chargeReq(payment.MethodQRIS)); err != nil {
+			t.Fatalf("CreateTransaction: %v", err)
+		}
+		srv.Close()
+		if configured == "" && len(got) != 0 || configured != "" && (len(got) != 1 || got[0] != configured) {
+			t.Errorf("configured %q: header %v", configured, got)
+		}
+	}
+}

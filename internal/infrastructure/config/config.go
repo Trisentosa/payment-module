@@ -50,6 +50,8 @@ type Midtrans struct {
 	Env       string
 	BaseURL   string
 	TimeoutMs int
+	// NotificationURL overrides the dashboard's notification URL for this deployment.
+	NotificationURL string
 }
 
 type Log struct {
@@ -151,10 +153,11 @@ func Load() (Config, error) {
 			URL: getEnv("RABBITMQ_URL", "amqp://guest:guest@localhost:5672/paygate"),
 		},
 		Midtrans: Midtrans{
-			ServerKey: getEnv("MIDTRANS_SERVER_KEY", ""),
-			Env:       midtransEnv,
-			BaseURL:   midtransBaseURL,
-			TimeoutMs: midtransTimeoutMs,
+			ServerKey:       getEnv("MIDTRANS_SERVER_KEY", ""),
+			Env:             midtransEnv,
+			BaseURL:         midtransBaseURL,
+			TimeoutMs:       midtransTimeoutMs,
+			NotificationURL: os.Getenv("MIDTRANS_NOTIFICATION_URL"),
 		},
 		Log: Log{
 			Level:  getEnv("LOG_LEVEL", "info"),

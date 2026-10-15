@@ -88,9 +88,10 @@ func main() {
 	// Gateway
 	gatewayFactory := gateway.NewFactory(map[string]ports.GatewayPort{
 		"MIDTRANS": midtrans.NewAdapter(midtrans.Config{
-			ServerKey: cfg.Midtrans.ServerKey,
-			BaseURL:   cfg.Midtrans.BaseURL,
-			Timeout:   time.Duration(cfg.Midtrans.TimeoutMs) * time.Millisecond,
+			ServerKey:       cfg.Midtrans.ServerKey,
+			BaseURL:         cfg.Midtrans.BaseURL,
+			Timeout:         time.Duration(cfg.Midtrans.TimeoutMs) * time.Millisecond,
+			NotificationURL: cfg.Midtrans.NotificationURL,
 		}),
 	})
 

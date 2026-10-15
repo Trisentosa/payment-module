@@ -1,4 +1,4 @@
-.PHONY: up up-full down migrate sqlc openapi test test-integration e2e e2e-up e2e-down lint build run check
+.PHONY: up up-full down migrate sqlc openapi test test-integration e2e e2e-up e2e-down sandbox lint build run check
 
 # Mode A: infrastructure only (service runs natively)
 up:
@@ -44,6 +44,14 @@ e2e-down:
 
 e2e: e2e-up
 	go test -tags=e2e ./test/e2e/ -count=1 -v
+
+# Sandbox drill: real transactions against the Midtrans sandbox, paid by you in its
+# simulators. Needs sandbox keys in .env and cloudflared (or SANDBOX_PUBLIC_URL).
+# One scenario: make sandbox SANDBOX_RUN=TestSandbox_QRIS
+SANDBOX_RUN ?= TestSandbox
+
+sandbox: e2e-up
+	go test -tags=sandbox ./test/e2e/ -count=1 -v -timeout=90m -run '$(SANDBOX_RUN)'
 
 lint:
 	golangci-lint run ./...

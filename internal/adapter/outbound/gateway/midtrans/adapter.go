@@ -23,6 +23,9 @@ type Config struct {
 	ServerKey string
 	BaseURL   string
 	Timeout   time.Duration
+	// NotificationURL, when set, is where Midtrans sends this deployment's payment
+	// notifications instead of the dashboard's URL (X-Override-Notification on each charge).
+	NotificationURL string
 }
 
 type Adapter struct {
@@ -264,6 +267,10 @@ func (r response) failed() bool {
 // do calls Midtrans. An error means no usable reply arrived, so the outcome is unknown;
 // it wraps ports.ErrUnknownOutcome.
 func (a *Adapter) do(ctx context.Context, method, path string, body map[string]any) (response, error) {
+	return a.send(ctx, method, path, body, nil)
+}
+
+func (a *Adapter) send(ctx context.Context, method, path string, body map[string]any, header http.Header) (response, error) {
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -275,6 +282,9 @@ func (a *Adapter) do(ctx context.Context, method, path string, body map[string]a
 	req, err := http.NewRequestWithContext(ctx, method, a.cfg.BaseURL+path, reqBody)
 	if err != nil {
 		return response{}, err
+	}
+	for k, v := range header {
+		req.Header[k] = v
 	}
 	req.SetBasicAuth(a.cfg.ServerKey, "")
 	req.Header.Set("Accept", "application/json")

@@ -12,33 +12,6 @@ import (
 	"time"
 )
 
-// runID keeps reference_ids unique if the suite runs more than once against one database.
-var runID = time.Now().Format("150405")
-
-func ref(name string) string { return name + "-" + runID }
-
-func paymentRequest(reference, method string, amount int64, extra map[string]any) map[string]any {
-	req := map[string]any{
-		"reference_id":        reference,
-		"amount":              amount,
-		"currency":            "IDR",
-		"gateway_type":        "MIDTRANS",
-		"payment_method_type": method,
-		"customer_name":       "Siti",
-		"customer_email":      "siti@example.com",
-	}
-	for k, v := range extra {
-		req[k] = v
-	}
-	return req
-}
-
-// create makes a payment as order-service and returns the decoded 201 response.
-func create(t *testing.T, req map[string]any) map[string]any {
-	t.Helper()
-	return expect(t, call(t, http.MethodPost, "/payments", orderKey, req), http.StatusCreated, "create payment").JSON(t)
-}
-
 func TestCallerAuthentication(t *testing.T) {
 	p := create(t, paymentRequest(ref("AUTH"), "QRIS", 50000, nil))
 	id := str(p, "payment_id")

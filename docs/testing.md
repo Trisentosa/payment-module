@@ -8,6 +8,7 @@
 | `make check` | `build → lint → test`; the definition of done | Go, golangci-lint |
 | `make test-integration` | Unit tests plus everything tagged `integration` | Docker, or a scratch Postgres (below) |
 | `make e2e` | The end-to-end suite (below) | Docker |
+| `make sandbox` | The sandbox drill: real Midtrans transactions (below) | Docker, sandbox keys, cloudflared, a person |
 
 ## Layers
 
@@ -83,6 +84,35 @@ prints the end of the server's log.
 Unit tests cover rules; the e2e suite covers wiring. Add an e2e test when a behavior
 depends on how parts are put together (routing, config, transactions, the outbox), not for
 every rule.
+
+## Sandbox Drill
+
+`make sandbox` runs the same harness against the **real Midtrans sandbox** (tag
+`sandbox`, `test/e2e/sandbox_test.go`). It creates real sandbox transactions of every
+method, pauses with exact instructions when a person must pay in Midtrans's simulator
+(VA number, QR image URL, 3DS link with OTP `112233`), waits for Midtrans's real
+notification, then refunds or cancels and checks PayGate against Midtrans's own status API.
+
+Setup, once:
+
+1. In the sandbox dashboard, Settings → Access Keys, use the **General** credentials (not
+   BI SNAP). Put them in `.env`, which git ignores:
+   `MIDTRANS_SERVER_KEY=SB-Mid-server-…` and `MIDTRANS_CLIENT_KEY=SB-Mid-client-…`
+   (the client key only tokenizes test cards). Production keys are refused.
+2. Install `cloudflared`. The drill opens a quick tunnel (no account) and has PayGate send
+   `X-Override-Notification` with each charge, so the dashboard's notification URL is left
+   alone. With your own tunnel, set `SANDBOX_PUBLIC_URL` to the URL forwarding to
+   `localhost:18080` instead.
+
+```sh
+make sandbox                                  # every scenario, about 10 minutes of your time
+make sandbox SANDBOX_RUN=TestSandbox_QRIS     # one scenario
+SANDBOX_NO_WEBHOOKS=1 make sandbox            # no tunnel: only the scenarios no one pays in
+```
+
+`SANDBOX_WAIT` (default `10m`) is how long each step waits for you. Card refunds may be
+declined until Midtrans settles the capture (next day in production); the drill then
+checks that PayGate recorded the decline cleanly.
 
 ## Writing Tests
 

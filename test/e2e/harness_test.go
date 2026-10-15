@@ -1,8 +1,9 @@
-//go:build e2e
+//go:build e2e || sandbox
 
 // Package e2e_test runs the real PayGate binary against real Postgres, Redis and RabbitMQ
-// (test/e2e/docker-compose.yml) and a fake Midtrans, and drives it over HTTP the way a
-// calling service and Midtrans would. Run it with `make e2e`.
+// (test/e2e/docker-compose.yml) and drives it over HTTP the way a calling service would.
+// The gateway is chosen by build tag: `e2e` uses a fake Midtrans (make e2e), `sandbox`
+// the real Midtrans sandbox with a person paying in its simulators (make sandbox).
 package e2e_test
 
 import (
@@ -29,23 +30,24 @@ import (
 )
 
 const (
-	serverKey = "SB-Mid-server-e2e-test-key"
-	adminKey  = "e2e-admin-key-0123456789-0123456789"
-	orderKey  = "pgk_e2e-order-service"
-	billKey   = "pgk_e2e-billing-service"
-
-	// PayGate gives up on Midtrans after gatewayTimeout; the fake answers LOST charges
-	// after lostReplyDelay, so PayGate never sees those replies.
-	gatewayTimeout = 1500 * time.Millisecond
-	lostReplyDelay = 2500 * time.Millisecond
+	adminKey = "e2e-admin-key-0123456789-0123456789"
+	orderKey = "pgk_e2e-order-service"
+	billKey  = "pgk_e2e-billing-service"
 )
 
 var (
-	paygate string        // base URL of the running server
-	midtrans *fakeMidtrans
-	events   *eventLog
-	db       *pgx.Conn
+	paygate string // base URL of the running server
+	events  *eventLog
+	db      *pgx.Conn
 )
+
+// gatewaySetup is what a build tag's startGateway provides: the server's Midtrans settings,
+// a cleanup, and an optional check once the server is up.
+type gatewaySetup struct {
+	env        []string
+	stop       func()
+	afterStart func() error
+}
 
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
@@ -94,10 +96,7 @@ func run(m *testing.M) (int, error) {
 	}
 	_ = rdb.Close()
 
-	midtrans = newFakeMidtrans(serverKey, lostReplyDelay)
-	defer midtrans.Close()
-
-	port, err := freePort()
+	port, err := serverPort()
 	if err != nil {
 		return 0, err
 	}
@@ -106,22 +105,24 @@ func run(m *testing.M) (int, error) {
 		return 0, err
 	}
 	paygate = fmt.Sprintf("http://127.0.0.1:%d", port)
-	midtrans.webhookURL = paygate + "/webhooks/midtrans"
+	gw, err := startGateway(root, paygate)
+	if err != nil {
+		return 0, fmt.Errorf("gateway: %w", err)
+	}
+	defer gw.stop()
 
 	env := append(os.Environ(),
 		"SERVER_PORT="+fmt.Sprint(port), "METRICS_PORT="+fmt.Sprint(metricsPort),
 		"DB_HOST="+dbHost, "DB_PORT="+dbPort, "DB_NAME=paygate_e2e", "DB_USER=paygate_user", "DB_PASSWORD=secret",
 		"REDIS_ADDR="+redisAddr, "REDIS_PASSWORD=",
 		"RABBITMQ_URL="+amqpURL,
-		"MIDTRANS_SERVER_KEY="+serverKey, "MIDTRANS_BASE_URL="+midtrans.URL(),
-		"MIDTRANS_TIMEOUT_MS="+fmt.Sprint(gatewayTimeout.Milliseconds()),
 		"ADMIN_API_KEY="+adminKey,
 		"CALLER_API_KEYS=order-service:"+apikey.Hash(orderKey)+",billing-service:"+apikey.Hash(billKey),
 		// Reconcile within seconds instead of minutes.
-		"RECONCILE_INTERVAL=1s", "RECONCILE_CHARGE_GRACE=3s",
-		"RECONCILE_REFUND_GRACE=2s", "RECONCILE_REFUND_RETRY_AFTER=4s",
+		"RECONCILE_INTERVAL=1s", "RECONCILE_REFUND_GRACE=2s", "RECONCILE_REFUND_RETRY_AFTER=4s",
 		"LOG_FORMAT=json", "OTEL_EXPORTER_OTLP_ENDPOINT=",
 	)
+	env = append(env, gw.env...) // later entries win
 
 	if out, err := goCmd(root, env, "run", "./cmd/migrate", "up"); err != nil {
 		return 0, fmt.Errorf("migrate: %w\n%s", err, out)
@@ -154,6 +155,11 @@ func run(m *testing.M) (int, error) {
 	}()
 	if err = waitHealthy(paygate+"/healthz", 30*time.Second); err != nil {
 		return 0, fmt.Errorf("%w\nserver log:\n%s", err, tail(logPath))
+	}
+	if gw.afterStart != nil {
+		if err = gw.afterStart(); err != nil {
+			return 0, err
+		}
 	}
 
 	code := m.Run()
@@ -317,6 +323,35 @@ func waitForStatus(t *testing.T, key, id, want string, within time.Duration) {
 		got := paymentStatus(t, key, id)
 		return got == want, "status is " + got
 	})
+}
+
+// ---- payments ----
+
+// runID keeps reference_ids unique if the suite runs more than once against one database.
+var runID = time.Now().Format("150405")
+
+func ref(name string) string { return name + "-" + runID }
+
+func paymentRequest(reference, method string, amount int64, extra map[string]any) map[string]any {
+	req := map[string]any{
+		"reference_id":        reference,
+		"amount":              amount,
+		"currency":            "IDR",
+		"gateway_type":        "MIDTRANS",
+		"payment_method_type": method,
+		"customer_name":       "Siti",
+		"customer_email":      "siti@example.com",
+	}
+	for k, v := range extra {
+		req[k] = v
+	}
+	return req
+}
+
+// create makes a payment as order-service and returns the decoded 201 response.
+func create(t *testing.T, req map[string]any) map[string]any {
+	t.Helper()
+	return expect(t, call(t, http.MethodPost, "/payments", orderKey, req), http.StatusCreated, "create payment").JSON(t)
 }
 
 // ---- RabbitMQ ----

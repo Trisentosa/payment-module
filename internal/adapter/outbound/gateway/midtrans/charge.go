@@ -43,7 +43,11 @@ func (a *Adapter) CreateTransaction(ctx context.Context, req ports.CreateTransac
 		return nil, err
 	}
 
-	res, err := a.do(ctx, http.MethodPost, "/v2/charge", body)
+	var header http.Header
+	if a.cfg.NotificationURL != "" {
+		header = http.Header{"X-Override-Notification": {a.cfg.NotificationURL}}
+	}
+	res, err := a.send(ctx, http.MethodPost, "/v2/charge", body, header)
 	if err != nil {
 		return nil, apperror.GatewayError("midtrans charge failed", err)
 	}
