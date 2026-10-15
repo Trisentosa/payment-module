@@ -60,6 +60,7 @@ Issue real keys with `go run ./cmd/apikey <service-name>` (see [docs/security.md
 ```sh
 make test               # unit tests, no Docker needed
 make test-integration   # adds Postgres and RabbitMQ tests (needs Docker)
+make e2e                # the real server end to end, against Docker infra and a fake Midtrans
 ```
 
 Without Docker, the Postgres tests can run against a scratch database; see [docs/testing.md](docs/testing.md).

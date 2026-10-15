@@ -62,6 +62,7 @@ The `-v` flag drops the named volume, giving you a clean slate.
 ```sh
 make test               # unit tests, no Docker needed
 make test-integration   # adds Postgres and RabbitMQ tests (testcontainers, needs Docker)
+make e2e                # the real server against Docker infra and a fake Midtrans
 ```
 
 No Docker? Postgres tests can use a scratch database instead; see [testing.md](testing.md#integration-tests).

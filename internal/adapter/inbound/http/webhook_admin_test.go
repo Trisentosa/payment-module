@@ -95,12 +95,7 @@ func newAdminAPI(t *testing.T, repo *fake.PaymentRepo, reader *adminReader) http
 		query.NewGetOutboxStatsHandler(reader),
 		command.NewForceExpireHandler(repo, fake.NewCache()),
 	)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/v1/admin/payments", h.ListPayments)
-	mux.HandleFunc("GET /api/v1/admin/payments/{id}", h.GetPaymentDetail)
-	mux.HandleFunc("GET /api/v1/admin/payments/{id}/attempts", h.ListPaymentAttempts)
-	mux.HandleFunc("POST /api/v1/admin/payments/{id}/expire", h.ForceExpire)
-	mux.HandleFunc("GET /api/v1/admin/outbox/stats", h.OutboxStats)
+	mux := httpAdapter.AdminRoutes(h, &httpAdapter.RefundHandler{})
 	return middleware.AdminAuth(adminKey)(mux)
 }
 

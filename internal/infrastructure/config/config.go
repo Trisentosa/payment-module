@@ -4,20 +4,22 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	"github.com/Trisentosa/payment-module/internal/pkg/apikey"
 )
 
 type Config struct {
-	Server   Server
-	DB       DB
-	Redis    Redis
-	RabbitMQ RabbitMQ
-	Midtrans Midtrans
-	Log      Log
-	OTel     OTel
-	Admin    Admin
-	Callers  Callers
+	Server    Server
+	DB        DB
+	Redis     Redis
+	RabbitMQ  RabbitMQ
+	Midtrans  Midtrans
+	Log       Log
+	OTel      OTel
+	Admin     Admin
+	Callers   Callers
+	Reconcile Reconcile
 }
 
 type Server struct {
@@ -62,6 +64,15 @@ type OTel struct {
 
 type Admin struct {
 	Key string
+}
+
+// Reconcile times the reconciler, which settles charges and refunds whose gateway reply
+// was lost. Zero RefundGrace / RefundRetryAfter keep the reconciler's own defaults.
+type Reconcile struct {
+	Interval         time.Duration
+	ChargeGrace      time.Duration
+	RefundGrace      time.Duration
+	RefundRetryAfter time.Duration
 }
 
 // Callers holds the services allowed to call the payments API.
@@ -114,6 +125,13 @@ func Load() (Config, error) {
 	if midtransEnv == "production" {
 		midtransBaseURL = "https://api.midtrans.com"
 	}
+	// For pointing at a Midtrans stand-in, e.g. in the end-to-end tests.
+	midtransBaseURL = getEnv("MIDTRANS_BASE_URL", midtransBaseURL)
+
+	reconcile, err := loadReconcile(time.Duration(midtransTimeoutMs) * time.Millisecond)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Server: Server{Port: serverPort, MetricsPort: metricsPort},
@@ -149,8 +167,38 @@ func Load() (Config, error) {
 		Admin: Admin{
 			Key: adminKey,
 		},
-		Callers: Callers{KeyHashes: callerKeys},
+		Callers:   Callers{KeyHashes: callerKeys},
+		Reconcile: reconcile,
 	}, nil
+}
+
+func loadReconcile(gatewayTimeout time.Duration) (Reconcile, error) {
+	var r Reconcile
+	for _, d := range []struct {
+		env string
+		def string
+		dst *time.Duration
+	}{
+		{"RECONCILE_INTERVAL", "1m", &r.Interval},
+		{"RECONCILE_CHARGE_GRACE", "2m", &r.ChargeGrace},
+		{"RECONCILE_REFUND_GRACE", "0", &r.RefundGrace},
+		{"RECONCILE_REFUND_RETRY_AFTER", "0", &r.RefundRetryAfter},
+	} {
+		v, err := time.ParseDuration(getEnv(d.env, d.def))
+		if err != nil || v < 0 {
+			return Reconcile{}, fmt.Errorf("invalid %s: want a duration such as 90s or 2m", d.env)
+		}
+		*d.dst = v
+	}
+	if r.Interval <= 0 {
+		return Reconcile{}, fmt.Errorf("RECONCILE_INTERVAL must be positive")
+	}
+	// A charge younger than the gateway timeout may still be in flight; reconciling it
+	// could cancel a payment the customer is about to complete.
+	if r.ChargeGrace <= gatewayTimeout {
+		return Reconcile{}, fmt.Errorf("RECONCILE_CHARGE_GRACE (%s) must exceed MIDTRANS_TIMEOUT_MS (%s)", r.ChargeGrace, gatewayTimeout)
+	}
+	return r, nil
 }
 
 func getEnv(key, fallback string) string {

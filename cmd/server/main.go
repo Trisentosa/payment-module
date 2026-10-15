@@ -153,14 +153,7 @@ func main() {
 	mux.HandleFunc("GET /readyz", readyzHandler(pool, redisClient, mqPublisher))
 
 	// Caller API: every route requires a service API key (see cmd/apikey).
-	callerMux := http.NewServeMux()
-	callerMux.HandleFunc("POST /payments", paymentHandler.CreatePayment)
-	callerMux.HandleFunc("DELETE /payments/{id}", paymentHandler.CancelPayment)
-	callerMux.HandleFunc("POST /payments/{id}/refunds", refundHandler.CreateRefund)
-	callerMux.HandleFunc("GET /payments", paymentHandler.ListPayments)
-	callerMux.HandleFunc("GET /payments/{id}", paymentHandler.GetPayment)
-	callerMux.HandleFunc("GET /payments/ref/{reference_id}", paymentHandler.GetPaymentByRef)
-	callerMux.HandleFunc("GET /payments/{id}/refunds", refundHandler.ListRefunds)
+	callerMux := httpAdapter.CallerRoutes(paymentHandler, refundHandler)
 
 	callerProtected := httpMiddleware.CallerAuth(cfg.Callers.KeyHashes)(callerMux)
 	mux.Handle("/payments", callerProtected)
@@ -170,15 +163,7 @@ func main() {
 	mux.HandleFunc("POST /webhooks/midtrans", webhookHandler.HandleMidtrans)
 
 	// Admin routes (protected by admin key middleware)
-	adminMux := http.NewServeMux()
-	adminMux.HandleFunc("GET /api/v1/admin/payments", adminHandler.ListPayments)
-	adminMux.HandleFunc("GET /api/v1/admin/payments/{id}", adminHandler.GetPaymentDetail)
-	adminMux.HandleFunc("GET /api/v1/admin/payments/{id}/attempts", adminHandler.ListPaymentAttempts)
-	adminMux.HandleFunc("GET /api/v1/admin/payments/{id}/events", adminHandler.ListPaymentEvents)
-	adminMux.HandleFunc("GET /api/v1/admin/payments/{id}/refunds", adminHandler.ListRefunds)
-	adminMux.HandleFunc("POST /api/v1/admin/payments/{id}/refunds", refundHandler.AdminCreateRefund)
-	adminMux.HandleFunc("POST /api/v1/admin/payments/{id}/expire", adminHandler.ForceExpire)
-	adminMux.HandleFunc("GET /api/v1/admin/outbox/stats", adminHandler.OutboxStats)
+	adminMux := httpAdapter.AdminRoutes(adminHandler, refundHandler)
 
 	adminProtected := httpMiddleware.AdminAuth(cfg.Admin.Key)(adminMux)
 	mux.Handle("/api/v1/admin/", adminProtected)
@@ -205,7 +190,11 @@ func main() {
 	go outboxWorker.Run(ctx)
 	go postgresAdapter.NewExpiryJob(paymentRepo, redisClient).Run(ctx)
 	// Settles charges and refunds whose gateway reply was lost.
-	go command.NewReconciler(paymentRepo, gatewayFactory, redisClient, attemptRecorder, command.ReconcileConfig{}).Run(ctx, time.Minute)
+	go command.NewReconciler(paymentRepo, gatewayFactory, redisClient, attemptRecorder, command.ReconcileConfig{
+		ChargeGrace:      cfg.Reconcile.ChargeGrace,
+		RefundGrace:      cfg.Reconcile.RefundGrace,
+		RefundRetryAfter: cfg.Reconcile.RefundRetryAfter,
+	}).Run(ctx, cfg.Reconcile.Interval)
 
 	go func() {
 		log.Info("metrics server starting", "port", cfg.Server.MetricsPort)

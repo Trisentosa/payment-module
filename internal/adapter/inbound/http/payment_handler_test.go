@@ -68,12 +68,7 @@ func newHarness() *harness {
 		query.NewGetByRefHandler(repo, c, get),
 		query.NewListPaymentsHandler(repo),
 	)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /payments", h.CreatePayment)
-	mux.HandleFunc("DELETE /payments/{id}", h.CancelPayment)
-	mux.HandleFunc("GET /payments", h.ListPayments)
-	mux.HandleFunc("GET /payments/{id}", h.GetPayment)
-	mux.HandleFunc("GET /payments/ref/{reference_id}", h.GetPaymentByRef)
+	mux := httpAdapter.CallerRoutes(h, &httpAdapter.RefundHandler{})
 	return &harness{mux: middleware.CallerAuth(callerKeys)(mux), repo: repo, gateway: gw, cache: c}
 }
 
@@ -310,5 +305,24 @@ func TestCallerAPI_ListRejectsMalformedParameters(t *testing.T) {
 		if rec := h.do(http.MethodGet, "/payments?"+qs, orderKey, ""); rec.Code != http.StatusBadRequest {
 			t.Errorf("%s: status %d, want 400 (body %s)", qs, rec.Code, rec.Body)
 		}
+	}
+}
+
+// Regression: GET /payments/ref/{reference_id} and GET /payments/{id}/refunds made the
+// server panic at startup; both must still be reachable.
+func TestCallerRoutes_ByReferenceAndRefundListCoexist(t *testing.T) {
+	h := newHarness()
+	if rec := h.post(createBody); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	if rec := h.do(http.MethodGet, "/payments/ref/ORDER-77", orderKey, ""); rec.Code != http.StatusOK {
+		t.Errorf("by reference: %d %s", rec.Code, rec.Body)
+	}
+	if rec := h.do(http.MethodGet, "/payments/ref/refunds", orderKey, ""); rec.Code != http.StatusNotFound ||
+		!strings.Contains(rec.Body.String(), "NOT_FOUND") {
+		t.Errorf("reference named \"refunds\": %d %s, want the by-reference 404", rec.Code, rec.Body)
+	}
+	if rec := h.do(http.MethodGet, "/payments/"+createdID(t, h)+"/other", orderKey, ""); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown sub-resource: %d", rec.Code)
 	}
 }

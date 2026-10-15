@@ -7,6 +7,7 @@
 | `make test` | All unit tests, with `-race` | Go only |
 | `make check` | `build → lint → test`; the definition of done | Go, golangci-lint |
 | `make test-integration` | Unit tests plus everything tagged `integration` | Docker, or a scratch Postgres (below) |
+| `make e2e` | The end-to-end suite (below) | Docker |
 
 ## Layers
 
@@ -57,6 +58,31 @@ PAYGATE_TEST_DATABASE_URL="postgres://postgres@127.0.0.1:55432/paygate_test?sslm
 The Postgres tests share that database, so they must not call `t.Parallel()`.
 
 **RabbitMQ.** Needs Docker; there is no external-broker override yet.
+
+## End-to-End Tests
+
+`test/e2e` (tag `e2e`) builds the real server binary and runs it the way production does:
+real Postgres, Redis and RabbitMQ from `test/e2e/docker-compose.yml`, migrations applied
+by `cmd/migrate`. Only Midtrans is faked: `fake_midtrans_test.go` answers charge, status,
+cancel and refund calls with Midtrans's documented shapes, and sends signed notifications
+to PayGate's webhook. The tests then drive PayGate over HTTP as a calling service would and
+check the result at every edge: API responses, events on RabbitMQ, what the gateway was
+asked to do, and rows in Postgres.
+
+```sh
+make e2e        # starts the stack (ports 55433, 56379, 55672), runs the suite
+make e2e-down   # stops it; the database lives in tmpfs, so nothing is kept
+```
+
+Each run resets the schema and flushes Redis first. The reconciler runs every second in
+the suite (`RECONCILE_*` variables), so lost-reply flows settle in seconds. The fake's
+behavior is chosen by the payment's `reference_id`: one containing `LOST` gets its charge
+reply after PayGate's timeout, one containing `DENY` is declined. On failure the suite
+prints the end of the server's log.
+
+Unit tests cover rules; the e2e suite covers wiring. Add an e2e test when a behavior
+depends on how parts are put together (routing, config, transactions, the outbox), not for
+every rule.
 
 ## Writing Tests
 
