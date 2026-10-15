@@ -86,3 +86,19 @@ func TestLoad_MidtransBaseURLOverride(t *testing.T) {
 		t.Errorf("base URL: %s", cfg.Midtrans.BaseURL)
 	}
 }
+
+func TestLoad_QRISAcquirer(t *testing.T) {
+	t.Setenv("ADMIN_API_KEY", adminKey)
+	t.Setenv("CALLER_API_KEYS", "order-service:"+apikey.Hash("k1"))
+
+	for value, wantErr := range map[string]bool{"": false, "gopay": false, "airpay shopee": false, "shopee": true, "dana": true} {
+		t.Setenv("MIDTRANS_QRIS_ACQUIRER", value)
+		cfg, err := config.Load()
+		if (err != nil) != wantErr {
+			t.Errorf("%q: err=%v, want error %v", value, err, wantErr)
+		}
+		if value == "" && err == nil && cfg.Midtrans.QRISAcquirer != "gopay" {
+			t.Errorf("default acquirer: %q", cfg.Midtrans.QRISAcquirer)
+		}
+	}
+}

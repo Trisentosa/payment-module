@@ -52,6 +52,8 @@ type Midtrans struct {
 	TimeoutMs int
 	// NotificationURL overrides the dashboard's notification URL for this deployment.
 	NotificationURL string
+	// QRISAcquirer is "gopay" or "airpay shopee"; see the Midtrans adapter.
+	QRISAcquirer string
 }
 
 type Log struct {
@@ -130,6 +132,11 @@ func Load() (Config, error) {
 	// For pointing at a Midtrans stand-in, e.g. in the end-to-end tests.
 	midtransBaseURL = getEnv("MIDTRANS_BASE_URL", midtransBaseURL)
 
+	qrisAcquirer := getEnv("MIDTRANS_QRIS_ACQUIRER", "gopay")
+	if qrisAcquirer != "gopay" && qrisAcquirer != "airpay shopee" {
+		return Config{}, fmt.Errorf(`MIDTRANS_QRIS_ACQUIRER must be "gopay" or "airpay shopee", got %q`, qrisAcquirer)
+	}
+
 	reconcile, err := loadReconcile(time.Duration(midtransTimeoutMs) * time.Millisecond)
 	if err != nil {
 		return Config{}, err
@@ -158,6 +165,7 @@ func Load() (Config, error) {
 			BaseURL:         midtransBaseURL,
 			TimeoutMs:       midtransTimeoutMs,
 			NotificationURL: os.Getenv("MIDTRANS_NOTIFICATION_URL"),
+			QRISAcquirer:    qrisAcquirer,
 		},
 		Log: Log{
 			Level:  getEnv("LOG_LEVEL", "info"),

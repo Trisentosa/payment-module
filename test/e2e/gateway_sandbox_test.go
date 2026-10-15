@@ -26,6 +26,9 @@ var (
 	// webhooks is false when no public URL was set up; tests that need Midtrans's
 	// notifications are then skipped.
 	webhooks bool
+	// qrisAcquirer defaults to ShopeePay: its QRs can be paid in the simulator by any app,
+	// while GoPay-acquired QRs fail on accounts where GoPay isn't active.
+	qrisAcquirer = envOr("SANDBOX_QRIS_ACQUIRER", "airpay shopee")
 )
 
 func serverPort() (int, error) {
@@ -49,6 +52,7 @@ func startGateway(root, paygateURL string) (gatewaySetup, error) {
 			"MIDTRANS_SERVER_KEY=" + sandboxServerKey,
 			"MIDTRANS_ENV=sandbox", "MIDTRANS_BASE_URL=",
 			"MIDTRANS_TIMEOUT_MS=30000", "RECONCILE_CHARGE_GRACE=2m",
+			"MIDTRANS_QRIS_ACQUIRER=" + qrisAcquirer,
 		},
 		stop: func() {},
 	}

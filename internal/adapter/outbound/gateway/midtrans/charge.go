@@ -38,7 +38,7 @@ var wib = time.FixedZone("WIB", 7*60*60)
 func (a *Adapter) CreateTransaction(ctx context.Context, req ports.CreateTransactionRequest) (*ports.GatewayResponse, error) {
 	log := logger.FromContext(ctx)
 
-	body, err := buildChargeRequest(req, time.Now())
+	body, err := buildChargeRequest(req, a.cfg.QRISAcquirer, time.Now())
 	if err != nil {
 		return nil, err
 	}
@@ -82,7 +82,7 @@ func (a *Adapter) CreateTransaction(ctx context.Context, req ports.CreateTransac
 
 // buildChargeRequest maps a gateway-neutral request onto Midtrans's /v2/charge body.
 // Problems the caller can fix come back as INVALID_INPUT, before anything reaches Midtrans.
-func buildChargeRequest(req ports.CreateTransactionRequest, now time.Time) (map[string]any, error) {
+func buildChargeRequest(req ports.CreateTransactionRequest, qrisAcquirer string, now time.Time) (map[string]any, error) {
 	body := map[string]any{
 		"transaction_details": map[string]any{
 			// order_id is PayGate's payment ID, so it is globally unique and webhooks map
@@ -109,7 +109,7 @@ func buildChargeRequest(req ports.CreateTransactionRequest, now time.Time) (map[
 		body["bank_transfer"] = map[string]any{"bank": bank}
 	case payment.MethodQRIS:
 		body["payment_type"] = "qris"
-		body["qris"] = map[string]any{"acquirer": "gopay"}
+		body["qris"] = map[string]any{"acquirer": qrisAcquirer}
 	case payment.MethodGoPay:
 		body["payment_type"] = "gopay"
 		if req.ReturnURL != "" {

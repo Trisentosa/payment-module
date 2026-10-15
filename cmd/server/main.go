@@ -92,6 +92,7 @@ func main() {
 			BaseURL:         cfg.Midtrans.BaseURL,
 			Timeout:         time.Duration(cfg.Midtrans.TimeoutMs) * time.Millisecond,
 			NotificationURL: cfg.Midtrans.NotificationURL,
+			QRISAcquirer:    cfg.Midtrans.QRISAcquirer,
 		}),
 	})
 

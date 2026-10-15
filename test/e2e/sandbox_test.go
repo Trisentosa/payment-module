@@ -235,8 +235,9 @@ func TestSandbox_QRIS_PartialRefunds(t *testing.T) {
 	needWebhooks(t)
 	p := create(t, paymentRequest(ref("SBX-QRIS"), "QRIS", 100000, nil))
 	id := str(p, "payment_id")
-	action(t, "Pay this QRIS code in the simulator (paste the image URL):",
-		"  https://simulator.sandbox.midtrans.com/v2/qris/index",
+	payOrAsk(t, qrisPayer(str(p, "next_action.qr_image_url"), "airpay shopee"),
+		"Pay this QRIS code in the simulator (paste the image URL):",
+		"  https://simulator.sandbox.midtrans.com/qris/index",
 		"  QR image URL: "+str(p, "next_action.qr_image_url"))
 	waitPaid(t, id, "COMPLETED")
 	expectGatewayStatus(t, id, 30*time.Second, "settlement")
@@ -259,6 +260,38 @@ func TestSandbox_QRIS_PartialRefunds(t *testing.T) {
 		n := events.count(id, "refund.completed")
 		return n == 2, fmt.Sprint(n)
 	})
+}
+
+// qrisPayer pays the QR automatically when the ShopeePay acquirer issued it; GoPay-acquired
+// QRs are left to the person, since they fail in the simulator on many sandbox accounts.
+func qrisPayer(qrImageURL, issuer string) func() error {
+	if qrisAcquirer != "airpay shopee" {
+		return nil
+	}
+	return func() error { return newSimulator().payQRIS(qrImageURL, issuer) }
+}
+
+// QRIS is interoperable: any QRIS app can pay the code, and Midtrans reports which one did.
+func TestSandbox_QRIS_AnyAppPays(t *testing.T) {
+	needWebhooks(t)
+	for _, app := range []struct{ issuer, reported string }{
+		{"gopay", "gopay"}, {"dana", "dana"}, {"ovo", "ovo"}, {"tcash", "linkaja"},
+	} {
+		t.Run(app.issuer, func(t *testing.T) {
+			p := create(t, paymentRequest(ref("SBX-QRIS-"+app.issuer), "QRIS", 12000, nil))
+			id := str(p, "payment_id")
+			payOrAsk(t, qrisPayer(str(p, "next_action.qr_image_url"), app.issuer),
+				"Pay this QRIS code with "+app.issuer+" in the simulator (paste the image URL):",
+				"  https://simulator.sandbox.midtrans.com/qris/index",
+				"  QR image URL: "+str(p, "next_action.qr_image_url"))
+			waitPaid(t, id, "COMPLETED")
+			gw := expectGatewayStatus(t, id, 30*time.Second, "settlement")
+			if !strings.EqualFold(str(gw, "issuer"), app.reported) || str(gw, "acquirer") != qrisAcquirer {
+				t.Errorf("Midtrans reports issuer %q acquirer %q, want %q and %q", str(gw, "issuer"), str(gw, "acquirer"), app.reported, qrisAcquirer)
+			}
+			events.WaitFor(t, id, "payment.completed")
+		})
+	}
 }
 
 func TestSandbox_GoPay_PartialRefund(t *testing.T) {

@@ -94,9 +94,15 @@ checks PayGate against Midtrans's own status API.
 
 Paying is automated where Midtrans's simulator allows it. The simulators are plain HTML
 forms with no API, and `simulator_test.go` submits them like a browser: virtual accounts
-(BCA, BNI, Permata, BRI) and ShopeePay (PIN `123456`). Cards need a real browser for 3-D
-Secure 2, so the drill prints the link and waits for you to enter OTP `112233`. QRIS and
-GoPay are manual too until their simulator works for the account. `SANDBOX_MANUAL=1` makes
+(BCA, BNI, Permata, BRI), ShopeePay (PIN `123456`), and QRIS paid with GoPay, DANA, OVO
+or LinkAja. Cards need a real browser for 3-D Secure 2, so the drill prints the link and
+waits for you to enter OTP `112233`. GoPay itself is manual too.
+
+The drill runs PayGate with `MIDTRANS_QRIS_ACQUIRER="airpay shopee"`
+(`SANDBOX_QRIS_ACQUIRER` changes it). On sandbox accounts where GoPay isn't fully active,
+GoPay payments and GoPay-acquired QRIS codes can be created but never paid ("Transaction
+failed to be processed" in the simulator, whichever app pays), while ShopeePay-acquired
+codes work with every app. `SANDBOX_MANUAL=1` makes
 every payment manual, e.g. if Midtrans changes the simulator pages.
 
 Setup, once:

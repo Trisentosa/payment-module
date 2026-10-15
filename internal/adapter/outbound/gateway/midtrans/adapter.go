@@ -26,7 +26,16 @@ type Config struct {
 	// NotificationURL, when set, is where Midtrans sends this deployment's payment
 	// notifications instead of the dashboard's URL (X-Override-Notification on each charge).
 	NotificationURL string
+	// QRISAcquirer is who issues QRIS codes and settles their payments: "gopay" (the
+	// default) or "airpay shopee". Customers can pay either with any QRIS app.
+	QRISAcquirer string
 }
+
+// QRIS acquirers Midtrans's Core API supports.
+const (
+	QRISAcquirerGoPay     = "gopay"
+	QRISAcquirerShopeePay = "airpay shopee"
+)
 
 type Adapter struct {
 	cfg    Config
@@ -34,6 +43,9 @@ type Adapter struct {
 }
 
 func NewAdapter(cfg Config) *Adapter {
+	if cfg.QRISAcquirer == "" {
+		cfg.QRISAcquirer = QRISAcquirerGoPay
+	}
 	return &Adapter{
 		cfg:    cfg,
 		client: &http.Client{Timeout: cfg.Timeout},

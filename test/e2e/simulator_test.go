@@ -57,25 +57,47 @@ func (s *simulator) payShopeePay(deeplink string) error {
 	return s.submitAndCheck(page, at, url.Values{"pin": {"123456"}})
 }
 
+// payQRIS scans the QR image with the given app (issuer: "gopay", "airpay shopee",
+// "dana", "ovo", "tcash"). QRs from the ShopeePay acquirer finish on ShopeePay's PIN page.
+func (s *simulator) payQRIS(qrImageURL, issuer string) error {
+	page, at, err := s.send(http.MethodPost, simulatorURL+"/qris/payment", url.Values{"qrCodeUrl": {qrImageURL}})
+	if err != nil {
+		return fmt.Errorf("open QR: %w", err)
+	}
+	page, at, err = s.submit(page, at, url.Values{"issuer": {issuer}})
+	if err != nil {
+		return fmt.Errorf("pay QR with %s: %w", issuer, err)
+	}
+	if f, err := firstForm(page); err == nil && f.fields.Has("pin") {
+		return s.submitAndCheck(page, at, url.Values{"pin": {"123456"}})
+	}
+	return verdict(page)
+}
+
 // submitAndCheck submits the page's form, with set overriding its fields, and reads the
 // simulator's verdict from the result page.
 func (s *simulator) submitAndCheck(page string, at *url.URL, set url.Values) error {
+	result, _, err := s.submit(page, at, set)
+	if err != nil {
+		return err
+	}
+	return verdict(result)
+}
+
+// submit submits the page's first form, with set overriding its fields.
+func (s *simulator) submit(page string, at *url.URL, set url.Values) (string, *url.URL, error) {
 	f, err := firstForm(page)
 	if err != nil {
-		return fmt.Errorf("%s: %w; page says: %s", at, err, pageText(page))
+		return "", nil, fmt.Errorf("%s: %w; page says: %s", at, err, pageText(page))
 	}
 	for k, v := range set {
 		f.fields[k] = v
 	}
 	target, err := at.Parse(f.action)
 	if err != nil {
-		return err
+		return "", nil, err
 	}
-	result, _, err := s.send(f.method, target.String(), f.fields)
-	if err != nil {
-		return err
-	}
-	return verdict(result)
+	return s.send(f.method, target.String(), f.fields)
 }
 
 func (s *simulator) send(method, target string, form url.Values) (string, *url.URL, error) {
