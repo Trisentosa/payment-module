@@ -38,13 +38,25 @@ func serverPort() (int, error) {
 // startGateway points PayGate at the Midtrans sandbox, with notifications routed to a
 // public URL: SANDBOX_PUBLIC_URL if set, otherwise a cloudflared quick tunnel.
 func startGateway(root, paygateURL string) (gatewaySetup, error) {
-	if err := loadDotenv(envOr("SANDBOX_ENV_FILE", filepath.Join(root, ".env"))); err != nil {
+	// go test runs in test/e2e, so a relative SANDBOX_ENV_FILE is taken from the repo root,
+	// where make runs. A file named explicitly must exist; the default .env may not.
+	envFile, explicit := os.LookupEnv("SANDBOX_ENV_FILE")
+	if !explicit {
+		envFile = ".env"
+	}
+	if !filepath.IsAbs(envFile) {
+		envFile = filepath.Join(root, envFile)
+	}
+	if _, err := os.Stat(envFile); err != nil && explicit {
+		return gatewaySetup{}, fmt.Errorf("SANDBOX_ENV_FILE: %w", err)
+	}
+	if err := loadDotenv(envFile); err != nil {
 		return gatewaySetup{}, err
 	}
 	sandboxServerKey, sandboxClientKey = os.Getenv("MIDTRANS_SERVER_KEY"), os.Getenv("MIDTRANS_CLIENT_KEY")
 	// Refuse production keys: this suite creates and refunds transactions.
 	if !strings.HasPrefix(sandboxServerKey, "SB-Mid-server-") || !strings.HasPrefix(sandboxClientKey, "SB-Mid-client-") {
-		return gatewaySetup{}, fmt.Errorf("MIDTRANS_SERVER_KEY and MIDTRANS_CLIENT_KEY must be sandbox keys (SB-Mid-server-…, SB-Mid-client-…); set them in .env or SANDBOX_ENV_FILE")
+		return gatewaySetup{}, fmt.Errorf("MIDTRANS_SERVER_KEY and MIDTRANS_CLIENT_KEY must be sandbox keys (SB-Mid-server-…, SB-Mid-client-…); set them in %s", envFile)
 	}
 
 	setup := gatewaySetup{
