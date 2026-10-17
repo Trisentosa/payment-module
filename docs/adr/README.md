@@ -6,7 +6,7 @@ ADRs document significant decisions made during the design and implementation of
 
 | ADR | Title | Status |
 |---|---|---|
-| ADR-001 | Sync vs. async gateway call | Draft (TD-02) |
+| [ADR-001](001-synchronous-gateway-calls.md) | Call the gateway synchronously, reconcile unknown outcomes | Accepted |
 
 ## Format
 

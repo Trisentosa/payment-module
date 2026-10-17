@@ -33,6 +33,10 @@ Redis lock) asks the gateway what happened:
 | refund `PENDING` > 30 min | doesn't list it | re-sent with the same refund key (the gateway won't refund twice) |
 | refund `PENDING` > 6 days | — | logged as needing manual review (Midtrans only retries a refund key for 7 days) |
 
+The times above are the defaults. `RECONCILE_INTERVAL`, `RECONCILE_CHARGE_GRACE`,
+`RECONCILE_REFUND_GRACE` and `RECONCILE_REFUND_RETRY_AFTER` change them (Go durations such
+as `90s`); the charge grace must exceed `MIDTRANS_TIMEOUT_MS`, or the server refuses to start.
+
 A webhook that arrives first settles the payment the same way; the reconciler then
 finds nothing to do. The expiry job leaves `INITIATED` payments to the reconciler.
 

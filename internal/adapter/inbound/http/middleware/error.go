@@ -10,6 +10,9 @@ import (
 
 var ErrInvalidJSON = apperror.InvalidInput("invalid or malformed JSON body")
 
+// ErrInvalidPaymentID answers a payment ID in the path that is not a UUID.
+var ErrInvalidPaymentID = apperror.InvalidInput("payment id must be a UUID")
+
 var codeToHTTP = map[apperror.Code]int{
 	apperror.CodeNotFound:            http.StatusNotFound,
 	apperror.CodeAlreadyExists:       http.StatusConflict,

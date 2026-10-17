@@ -40,9 +40,7 @@ func newRefundAPI(t *testing.T) *refundAPI {
 		command.NewRefundPaymentHandler(repo, fake.GatewayFactory{"MIDTRANS": gw}, fake.NewCache(), &fake.AttemptRecorder{}),
 		query.NewListRefundsHandler(repo),
 	)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /payments/{id}/refunds", h.CreateRefund)
-	mux.HandleFunc("GET /payments/{id}/refunds", h.ListRefunds)
+	mux := httpAdapter.CallerRoutes(&httpAdapter.PaymentHandler{}, h)
 	return &refundAPI{mux: middleware.CallerAuth(callerKeys)(mux), gw: gw, id: p.ID.String()}
 }
 

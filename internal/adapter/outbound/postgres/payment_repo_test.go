@@ -347,6 +347,43 @@ func TestPaymentRepo_ListPaginated(t *testing.T) {
 	}
 }
 
+// Payments created in the same instant must each appear exactly once across pages.
+func TestPaymentRepo_ListPaginated_KeysetBreaksTimestampTies(t *testing.T) {
+	pool := setupTestDB(t)
+	repo := pgxAdapter.NewPaymentRepo(pool, pgxAdapter.NewOutboxWriter())
+	ctx := context.Background()
+
+	prefix := "TIE-" + uuid.NewString()[:8] + "-"
+	at := time.Now().UTC().Truncate(time.Microsecond)
+	for i := 0; i < 3; i++ {
+		p := newTestPayment(fmt.Sprintf("%s%d", prefix, i))
+		p.CreatedAt = at
+		if err := repo.Save(ctx, p); err != nil {
+			t.Fatalf("Save: %v", err)
+		}
+	}
+
+	seen := map[uuid.UUID]bool{}
+	var after *payment.PageKey
+	for page := 0; page < 4; page++ {
+		got, err := repo.ListPaginated(ctx, payment.ListFilter{ReferenceID: prefix, After: after, Limit: 1})
+		if err != nil {
+			t.Fatalf("ListPaginated: %v", err)
+		}
+		if len(got) == 0 {
+			break
+		}
+		if seen[got[0].ID] {
+			t.Fatalf("payment %s listed twice", got[0].ID)
+		}
+		seen[got[0].ID] = true
+		after = &payment.PageKey{CreatedAt: got[0].CreatedAt, ID: got[0].ID}
+	}
+	if len(seen) != 3 {
+		t.Errorf("paged through %d of 3 payments sharing a created_at", len(seen))
+	}
+}
+
 // Regression (F8): sequence numbers restarted at 1 on every save, so a payment's event
 // history couldn't be put back in order.
 func TestPaymentRepo_EventSequenceContinuesAcrossSaves(t *testing.T) {

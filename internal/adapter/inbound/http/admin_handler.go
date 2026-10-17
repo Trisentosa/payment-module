@@ -3,8 +3,6 @@ package http
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -15,6 +13,7 @@ import (
 
 type AdminHandler struct {
 	listPayments *query.AdminListPaymentsHandler
+	getPayment   *query.GetPaymentHandler
 	getAttempts  *query.GetAttemptsHandler
 	getEvents    *query.GetEventsHandler
 	getRefunds   *query.GetRefundsHandler
@@ -24,6 +23,7 @@ type AdminHandler struct {
 
 func NewAdminHandler(
 	listPayments *query.AdminListPaymentsHandler,
+	getPayment *query.GetPaymentHandler,
 	getAttempts *query.GetAttemptsHandler,
 	getEvents *query.GetEventsHandler,
 	getRefunds *query.GetRefundsHandler,
@@ -32,6 +32,7 @@ func NewAdminHandler(
 ) *AdminHandler {
 	return &AdminHandler{
 		listPayments: listPayments,
+		getPayment:   getPayment,
 		getAttempts:  getAttempts,
 		getEvents:    getEvents,
 		getRefunds:   getRefunds,
@@ -42,77 +43,53 @@ func NewAdminHandler(
 
 func (h *AdminHandler) ListPayments(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-
-	lq := query.AdminListPaymentsQuery{
-		Status:        q.Get("status"),
-		CallerService: q.Get("caller_service"),
-		GatewayType:   q.Get("gateway_type"),
-		ReferenceID:   q.Get("reference_id"),
-	}
-	if v := q.Get("from"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			lq.From = &t
-		}
-	}
-	if v := q.Get("to"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			lq.To = &t
-		}
-	}
-	if v := q.Get("cursor"); v != "" {
-		if t, err := time.Parse(time.RFC3339, v); err == nil {
-			lq.Cursor = &t
-		}
-	}
-	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			lq.Limit = n
-		}
-	}
-
-	result, err := h.listPayments.Handle(r.Context(), lq)
+	params, err := parseListParams(q)
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
 
-	type meta struct {
-		Count      int    `json:"count"`
-		NextCursor string `json:"next_cursor,omitempty"`
-		HasMore    bool   `json:"has_more"`
+	result, err := h.listPayments.Handle(r.Context(), query.AdminListPaymentsQuery{
+		Status:        q.Get("status"),
+		CallerService: q.Get("caller_service"),
+		GatewayType:   q.Get("gateway_type"),
+		ReferenceID:   q.Get("reference_id"),
+		From:          params.From,
+		To:            params.To,
+		Cursor:        params.Cursor,
+		Limit:         params.Limit,
+	})
+	if err != nil {
+		middleware.WriteError(w, err)
+		return
 	}
-	resp := struct {
-		Data []*query.PaymentDTO `json:"data"`
-		Meta meta                `json:"meta"`
-	}{
-		Data: result.Payments,
-		Meta: meta{Count: len(result.Payments), HasMore: result.NextCursor != nil},
-	}
-	if result.NextCursor != nil {
-		resp.Meta.NextCursor = result.NextCursor.UTC().Format(time.RFC3339)
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	writePaymentList(w, result)
 }
 
 func (h *AdminHandler) GetPaymentDetail(w http.ResponseWriter, r *http.Request) {
 	id, err := parseAdminPaymentID(r)
 	if err != nil {
-		middleware.WriteError(w, middleware.ErrInvalidJSON)
+		middleware.WriteError(w, middleware.ErrInvalidPaymentID)
 		return
 	}
 
-	// Reuse existing get handler via the admin list with an exact ID lookup.
-	// Since we already have getPayment via the standard handler, here we delegate
-	// to the attempts/events query to produce the full detail response.
-	// For simplicity, return a combined view of attempts + events.
-	attempts, err := h.getAttempts.Handle(r.Context(), query.GetAttemptsQuery{PaymentID: id})
+	ctx := r.Context()
+	p, err := h.getPayment.Handle(ctx, query.GetPaymentQuery{ID: id, Admin: true})
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
 	}
-	events, err := h.getEvents.Handle(r.Context(), query.GetEventsQuery{PaymentID: id})
+	attempts, err := h.getAttempts.Handle(ctx, query.GetAttemptsQuery{PaymentID: id})
+	if err != nil {
+		middleware.WriteError(w, err)
+		return
+	}
+	events, err := h.getEvents.Handle(ctx, query.GetEventsQuery{PaymentID: id})
+	if err != nil {
+		middleware.WriteError(w, err)
+		return
+	}
+	refunds, err := h.getRefunds.Handle(ctx, query.GetRefundsQuery{PaymentID: id})
 	if err != nil {
 		middleware.WriteError(w, err)
 		return
@@ -121,15 +98,17 @@ func (h *AdminHandler) GetPaymentDetail(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"payment_id": id.String(),
+		"payment":    p,
 		"attempts":   attempts,
 		"events":     events,
+		"refunds":    refunds,
 	})
 }
 
 func (h *AdminHandler) ListPaymentAttempts(w http.ResponseWriter, r *http.Request) {
 	id, err := parseAdminPaymentID(r)
 	if err != nil {
-		middleware.WriteError(w, middleware.ErrInvalidJSON)
+		middleware.WriteError(w, middleware.ErrInvalidPaymentID)
 		return
 	}
 
@@ -146,7 +125,7 @@ func (h *AdminHandler) ListPaymentAttempts(w http.ResponseWriter, r *http.Reques
 func (h *AdminHandler) ListPaymentEvents(w http.ResponseWriter, r *http.Request) {
 	id, err := parseAdminPaymentID(r)
 	if err != nil {
-		middleware.WriteError(w, middleware.ErrInvalidJSON)
+		middleware.WriteError(w, middleware.ErrInvalidPaymentID)
 		return
 	}
 
@@ -163,7 +142,7 @@ func (h *AdminHandler) ListPaymentEvents(w http.ResponseWriter, r *http.Request)
 func (h *AdminHandler) ListRefunds(w http.ResponseWriter, r *http.Request) {
 	id, err := parseAdminPaymentID(r)
 	if err != nil {
-		middleware.WriteError(w, middleware.ErrInvalidJSON)
+		middleware.WriteError(w, middleware.ErrInvalidPaymentID)
 		return
 	}
 
@@ -180,7 +159,7 @@ func (h *AdminHandler) ListRefunds(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) ForceExpire(w http.ResponseWriter, r *http.Request) {
 	id, err := parseAdminPaymentID(r)
 	if err != nil {
-		middleware.WriteError(w, middleware.ErrInvalidJSON)
+		middleware.WriteError(w, middleware.ErrInvalidPaymentID)
 		return
 	}
 

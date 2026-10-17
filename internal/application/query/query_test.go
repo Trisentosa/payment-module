@@ -95,15 +95,56 @@ func TestListPayments_PagesWithCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("page 1: %v", err)
 	}
-	if got := refs(page1); fmt.Sprint(got) != "[REF-4 REF-3 REF-2]" || page1.NextCursor == nil {
+	if got := refs(page1); fmt.Sprint(got) != "[REF-4 REF-3 REF-2]" || page1.NextCursor == "" {
 		t.Fatalf("page 1: %v next=%v", got, page1.NextCursor)
 	}
 	page2, err := h.Handle(ctx, query.ListPaymentsQuery{CallerService: "order-service", Limit: 3, Cursor: page1.NextCursor})
 	if err != nil {
 		t.Fatalf("page 2: %v", err)
 	}
-	if got := refs(page2); fmt.Sprint(got) != "[REF-1 REF-0]" || page2.NextCursor != nil {
+	if got := refs(page2); fmt.Sprint(got) != "[REF-1 REF-0]" || page2.NextCursor != "" {
 		t.Errorf("page 2: %v next=%v, want the last two and no cursor", got, page2.NextCursor)
+	}
+}
+
+func TestListPayments_PagesThroughEqualTimestamps(t *testing.T) {
+	ctx := context.Background()
+	at := time.Date(2026, 10, 15, 9, 0, 0, 0, time.UTC)
+	var seed []*payment.Payment
+	for i := 0; i < 5; i++ {
+		seed = append(seed, newPayment(t, fmt.Sprintf("SAME-%d", i), "order-service", at))
+	}
+	h := query.NewListPaymentsHandler(fake.NewPaymentRepo(seed...))
+
+	seen := map[string]bool{}
+	cursor := ""
+	for page := 0; page < 5; page++ {
+		res, err := h.Handle(ctx, query.ListPaymentsQuery{CallerService: "order-service", Limit: 2, Cursor: cursor})
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		for _, ref := range refs(res) {
+			if seen[ref] {
+				t.Errorf("%s listed twice", ref)
+			}
+			seen[ref] = true
+		}
+		if cursor = res.NextCursor; cursor == "" {
+			break
+		}
+	}
+	if len(seen) != 5 {
+		t.Errorf("listed %d of 5 payments created at the same instant", len(seen))
+	}
+}
+
+func TestListPayments_RejectsTamperedCursor(t *testing.T) {
+	h := query.NewListPaymentsHandler(fake.NewPaymentRepo())
+	for _, cursor := range []string{"not-base64!", "MjAyNi0xMC0xNVQwOTowMDowMFo"} { // the second has no id
+		_, err := h.Handle(context.Background(), query.ListPaymentsQuery{CallerService: "svc", Cursor: cursor})
+		if !apperror.IsCode(err, apperror.CodeInvalidInput) {
+			t.Errorf("cursor %q: expected INVALID_INPUT, got %v", cursor, err)
+		}
 	}
 }
 

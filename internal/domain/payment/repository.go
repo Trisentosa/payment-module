@@ -14,8 +14,15 @@ type ListFilter struct {
 	ReferenceID   string // prefix match
 	From          *time.Time
 	To            *time.Time
-	Cursor        *time.Time // created_at of last item in previous page
+	After         *PageKey // last row of the previous page
 	Limit         int
+}
+
+// PageKey is a row's position in a list sorted newest first. The ID breaks ties
+// between payments created at the same instant.
+type PageKey struct {
+	CreatedAt time.Time
+	ID        uuid.UUID
 }
 
 type Repository interface {

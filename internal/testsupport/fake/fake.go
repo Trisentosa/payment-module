@@ -174,7 +174,7 @@ func (r *PaymentRepo) FindExpired(_ context.Context, limit int) ([]*payment.Paym
 	return out, nil
 }
 
-// ListPaginated filters like the Postgres query: newest first, keyset cursor on created_at.
+// ListPaginated filters like the Postgres query: newest first, keyset on (created_at, id).
 func (r *PaymentRepo) ListPaginated(_ context.Context, f payment.ListFilter) ([]*payment.Payment, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -189,12 +189,12 @@ func (r *PaymentRepo) ListPaginated(_ context.Context, f payment.ListFilter) ([]
 			f.ReferenceID != "" && !strings.HasPrefix(p.ReferenceID, f.ReferenceID),
 			f.From != nil && p.CreatedAt.Before(*f.From),
 			f.To != nil && p.CreatedAt.After(*f.To),
-			f.Cursor != nil && !p.CreatedAt.Before(*f.Cursor):
+			f.After != nil && !newerFirst(*f.After, keyOf(p)):
 			continue
 		}
 		out = append(out, clone(p))
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	sort.Slice(out, func(i, j int) bool { return newerFirst(keyOf(out[i]), keyOf(out[j])) })
 	limit := f.Limit
 	if limit <= 0 {
 		limit = 50
@@ -203,6 +203,18 @@ func (r *PaymentRepo) ListPaginated(_ context.Context, f payment.ListFilter) ([]
 		out = out[:limit]
 	}
 	return out, nil
+}
+
+func keyOf(p *payment.Payment) payment.PageKey {
+	return payment.PageKey{CreatedAt: p.CreatedAt, ID: p.ID}
+}
+
+// newerFirst reports whether a sorts before b in a newest-first list.
+func newerFirst(a, b payment.PageKey) bool {
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.After(b.CreatedAt)
+	}
+	return strings.Compare(a.ID.String(), b.ID.String()) > 0
 }
 
 // LastListFilter returns the filter of the most recent ListPaginated call.

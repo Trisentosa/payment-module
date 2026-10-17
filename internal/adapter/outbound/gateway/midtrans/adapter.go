@@ -23,7 +23,19 @@ type Config struct {
 	ServerKey string
 	BaseURL   string
 	Timeout   time.Duration
+	// NotificationURL, when set, is where Midtrans sends this deployment's payment
+	// notifications instead of the dashboard's URL (X-Override-Notification on each charge).
+	NotificationURL string
+	// QRISAcquirer is who issues QRIS codes and settles their payments: "gopay" (the
+	// default) or "airpay shopee". Customers can pay either with any QRIS app.
+	QRISAcquirer string
 }
+
+// QRIS acquirers Midtrans's Core API supports.
+const (
+	QRISAcquirerGoPay     = "gopay"
+	QRISAcquirerShopeePay = "airpay shopee"
+)
 
 type Adapter struct {
 	cfg    Config
@@ -31,6 +43,9 @@ type Adapter struct {
 }
 
 func NewAdapter(cfg Config) *Adapter {
+	if cfg.QRISAcquirer == "" {
+		cfg.QRISAcquirer = QRISAcquirerGoPay
+	}
 	return &Adapter{
 		cfg:    cfg,
 		client: &http.Client{Timeout: cfg.Timeout},
@@ -264,6 +279,10 @@ func (r response) failed() bool {
 // do calls Midtrans. An error means no usable reply arrived, so the outcome is unknown;
 // it wraps ports.ErrUnknownOutcome.
 func (a *Adapter) do(ctx context.Context, method, path string, body map[string]any) (response, error) {
+	return a.send(ctx, method, path, body, nil)
+}
+
+func (a *Adapter) send(ctx context.Context, method, path string, body map[string]any, header http.Header) (response, error) {
 	var reqBody io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -275,6 +294,9 @@ func (a *Adapter) do(ctx context.Context, method, path string, body map[string]a
 	req, err := http.NewRequestWithContext(ctx, method, a.cfg.BaseURL+path, reqBody)
 	if err != nil {
 		return response{}, err
+	}
+	for k, v := range header {
+		req.Header[k] = v
 	}
 	req.SetBasicAuth(a.cfg.ServerKey, "")
 	req.Header.Set("Accept", "application/json")

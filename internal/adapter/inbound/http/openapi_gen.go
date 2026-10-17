@@ -74,45 +74,6 @@ func (e AdminForceExpireResponseStatus) Valid() bool {
 	}
 }
 
-// Defines values for AdminPaymentStatus.
-const (
-	AdminPaymentStatusCANCELLED         AdminPaymentStatus = "CANCELLED"
-	AdminPaymentStatusCOMPLETED         AdminPaymentStatus = "COMPLETED"
-	AdminPaymentStatusEXPIRED           AdminPaymentStatus = "EXPIRED"
-	AdminPaymentStatusFAILED            AdminPaymentStatus = "FAILED"
-	AdminPaymentStatusINITIATED         AdminPaymentStatus = "INITIATED"
-	AdminPaymentStatusPARTIALLYREFUNDED AdminPaymentStatus = "PARTIALLY_REFUNDED"
-	AdminPaymentStatusPENDING           AdminPaymentStatus = "PENDING"
-	AdminPaymentStatusPROCESSING        AdminPaymentStatus = "PROCESSING"
-	AdminPaymentStatusREFUNDED          AdminPaymentStatus = "REFUNDED"
-)
-
-// Valid indicates whether the value is a known member of the AdminPaymentStatus enum.
-func (e AdminPaymentStatus) Valid() bool {
-	switch e {
-	case AdminPaymentStatusCANCELLED:
-		return true
-	case AdminPaymentStatusCOMPLETED:
-		return true
-	case AdminPaymentStatusEXPIRED:
-		return true
-	case AdminPaymentStatusFAILED:
-		return true
-	case AdminPaymentStatusINITIATED:
-		return true
-	case AdminPaymentStatusPARTIALLYREFUNDED:
-		return true
-	case AdminPaymentStatusPENDING:
-		return true
-	case AdminPaymentStatusPROCESSING:
-		return true
-	case AdminPaymentStatusREFUNDED:
-		return true
-	default:
-		return false
-	}
-}
-
 // Defines values for CancelPaymentResponseStatus.
 const (
 	CANCELLED CancelPaymentResponseStatus = "CANCELLED"
@@ -266,6 +227,45 @@ func (e NextActionType) Valid() bool {
 	}
 }
 
+// Defines values for PaymentStatus.
+const (
+	PaymentStatusCANCELLED         PaymentStatus = "CANCELLED"
+	PaymentStatusCOMPLETED         PaymentStatus = "COMPLETED"
+	PaymentStatusEXPIRED           PaymentStatus = "EXPIRED"
+	PaymentStatusFAILED            PaymentStatus = "FAILED"
+	PaymentStatusINITIATED         PaymentStatus = "INITIATED"
+	PaymentStatusPARTIALLYREFUNDED PaymentStatus = "PARTIALLY_REFUNDED"
+	PaymentStatusPENDING           PaymentStatus = "PENDING"
+	PaymentStatusPROCESSING        PaymentStatus = "PROCESSING"
+	PaymentStatusREFUNDED          PaymentStatus = "REFUNDED"
+)
+
+// Valid indicates whether the value is a known member of the PaymentStatus enum.
+func (e PaymentStatus) Valid() bool {
+	switch e {
+	case PaymentStatusCANCELLED:
+		return true
+	case PaymentStatusCOMPLETED:
+		return true
+	case PaymentStatusEXPIRED:
+		return true
+	case PaymentStatusFAILED:
+		return true
+	case PaymentStatusINITIATED:
+		return true
+	case PaymentStatusPARTIALLYREFUNDED:
+		return true
+	case PaymentStatusPENDING:
+		return true
+	case PaymentStatusPROCESSING:
+		return true
+	case PaymentStatusREFUNDED:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for RefundStatus.
 const (
 	FAILED    RefundStatus = "FAILED"
@@ -344,16 +344,6 @@ type AdminForceExpireResponse struct {
 // AdminForceExpireResponseStatus defines model for AdminForceExpireResponse.Status.
 type AdminForceExpireResponseStatus string
 
-// AdminListPaymentsResponse defines model for AdminListPaymentsResponse.
-type AdminListPaymentsResponse struct {
-	Data []AdminPayment `json:"data"`
-	Meta struct {
-		Count      int        `json:"count"`
-		HasMore    bool       `json:"has_more"`
-		NextCursor *time.Time `json:"next_cursor,omitempty"`
-	} `json:"meta"`
-}
-
 // AdminOutboxStatsResponse defines model for AdminOutboxStatsResponse.
 type AdminOutboxStatsResponse struct {
 	Failed                  int `json:"failed"`
@@ -362,34 +352,15 @@ type AdminOutboxStatsResponse struct {
 	Published               int `json:"published"`
 }
 
-// AdminPayment Payment summary returned by admin list and detail endpoints
-type AdminPayment struct {
-	Amount               int64              `json:"amount"`
-	CallerService        string             `json:"caller_service"`
-	CreatedAt            time.Time          `json:"created_at"`
-	Currency             string             `json:"currency"`
-	Customer             map[string]any     `json:"customer"`
-	Description          *string            `json:"description,omitempty"`
-	ExpiredAt            *time.Time         `json:"expired_at,omitempty"`
-	Gateway              string             `json:"gateway"`
-	GatewayTransactionID *string            `json:"gateway_transaction_id,omitempty"`
-	ID                   openapi_types.UUID `json:"id"`
-	Metadata             *map[string]any    `json:"metadata,omitempty"`
-	PaidAt               *time.Time         `json:"paid_at,omitempty"`
-	PaymentMethodType    string             `json:"payment_method_type"`
-	ReferenceID          string             `json:"reference_id"`
-	Status               AdminPaymentStatus `json:"status"`
-	UpdatedAt            time.Time          `json:"updated_at"`
-}
-
-// AdminPaymentStatus defines model for AdminPayment.Status.
-type AdminPaymentStatus string
-
 // AdminPaymentDetailResponse defines model for AdminPaymentDetailResponse.
 type AdminPaymentDetailResponse struct {
-	Attempts  []AdminAttempt     `json:"attempts"`
-	Events    []AdminEvent       `json:"events"`
+	Attempts []AdminAttempt `json:"attempts"`
+	Events   []AdminEvent   `json:"events"`
+
+	// Payment A payment as stored by PayGate. Refund details are listed under /payments/{id}/refunds.
+	Payment   Payment            `json:"payment"`
 	PaymentID openapi_types.UUID `json:"payment_id"`
+	Refunds   []AdminRefund      `json:"refunds"`
 }
 
 // AdminRefund defines model for AdminRefund.
@@ -541,6 +512,47 @@ type NextAction struct {
 // NONE: nothing to do; the payment already finished (see status).
 type NextActionType string
 
+// Payment A payment as stored by PayGate. Refund details are listed under /payments/{id}/refunds.
+type Payment struct {
+	Amount               int64              `json:"amount"`
+	CallerService        string             `json:"caller_service"`
+	CreatedAt            time.Time          `json:"created_at"`
+	Currency             string             `json:"currency"`
+	Customer             map[string]any     `json:"customer"`
+	Description          *string            `json:"description,omitempty"`
+	ExpiredAt            *time.Time         `json:"expired_at,omitempty"`
+	Gateway              string             `json:"gateway"`
+	GatewayTransactionID *string            `json:"gateway_transaction_id,omitempty"`
+	ID                   openapi_types.UUID `json:"id"`
+	Metadata             *map[string]any    `json:"metadata,omitempty"`
+	PaidAt               *time.Time         `json:"paid_at,omitempty"`
+	PaymentMethodType    string             `json:"payment_method_type"`
+	ReferenceID          string             `json:"reference_id"`
+
+	// Status INITIATED: stored, gateway outcome not yet known. PENDING: waiting for the customer to pay.
+	// COMPLETED: paid. FAILED, CANCELLED, EXPIRED: closed without payment.
+	// PARTIALLY_REFUNDED, REFUNDED: paid, then refunded in part or in full.
+	Status    PaymentStatus `json:"status"`
+	UpdatedAt time.Time     `json:"updated_at"`
+}
+
+// PaymentListResponse defines model for PaymentListResponse.
+type PaymentListResponse struct {
+	Data []Payment `json:"data"`
+	Meta struct {
+		Count   int  `json:"count"`
+		HasMore bool `json:"has_more"`
+
+		// NextCursor Opaque. Pass it as `cursor` to fetch the next page; absent on the last page.
+		NextCursor *string `json:"next_cursor,omitempty"`
+	} `json:"meta"`
+}
+
+// PaymentStatus INITIATED: stored, gateway outcome not yet known. PENDING: waiting for the customer to pay.
+// COMPLETED: paid. FAILED, CANCELLED, EXPIRED: closed without payment.
+// PARTIALLY_REFUNDED, REFUNDED: paid, then refunded in part or in full.
+type PaymentStatus string
+
 // Refund defines model for Refund.
 type Refund struct {
 	Amount          int64      `json:"amount"`
@@ -595,6 +607,9 @@ type RefundResponse struct {
 
 // AdminPaymentID defines model for AdminPaymentID.
 type AdminPaymentID = openapi_types.UUID
+
+// Cursor defines model for Cursor.
+type Cursor = string
 
 // PaymentID defines model for PaymentID.
 type PaymentID = openapi_types.UUID
@@ -656,9 +671,32 @@ type AdminListPaymentsParams struct {
 	From        *time.Time `form:"from,omitempty" json:"from,omitempty"`
 	To          *time.Time `form:"to,omitempty" json:"to,omitempty"`
 
-	// Cursor Opaque cursor (created_at of last row in previous page)
-	Cursor *time.Time `form:"cursor,omitempty" json:"cursor,omitempty"`
-	Limit  *int       `form:"limit,omitempty" json:"limit,omitempty"`
+	// Cursor next_cursor from the previous page, unchanged. Omit for the first page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit Page size. Values above 100 return 100.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListPaymentsParams defines parameters for ListPayments.
+type ListPaymentsParams struct {
+	Status *PaymentStatus `form:"status,omitempty" json:"status,omitempty"`
+
+	// From Only payments created at or after this time
+	From *time.Time `form:"from,omitempty" json:"from,omitempty"`
+
+	// To Only payments created at or before this time
+	To *time.Time `form:"to,omitempty" json:"to,omitempty"`
+
+	// Cursor next_cursor from the previous page, unchanged. Omit for the first page.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit Page size. Values above 100 return 100.
+	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// XServiceName Optional. The calling service is identified by its API key, not by this header.
+	// If sent, it must name the key's own service, otherwise the request fails with 403.
+	XServiceName *XServiceName `json:"X-Service-Name,omitempty"`
 }
 
 // CreatePaymentParams defines parameters for CreatePayment.
@@ -668,8 +706,22 @@ type CreatePaymentParams struct {
 	XServiceName *XServiceName `json:"X-Service-Name,omitempty"`
 }
 
+// GetPaymentByReferenceParams defines parameters for GetPaymentByReference.
+type GetPaymentByReferenceParams struct {
+	// XServiceName Optional. The calling service is identified by its API key, not by this header.
+	// If sent, it must name the key's own service, otherwise the request fails with 403.
+	XServiceName *XServiceName `json:"X-Service-Name,omitempty"`
+}
+
 // CancelPaymentParams defines parameters for CancelPayment.
 type CancelPaymentParams struct {
+	// XServiceName Optional. The calling service is identified by its API key, not by this header.
+	// If sent, it must name the key's own service, otherwise the request fails with 403.
+	XServiceName *XServiceName `json:"X-Service-Name,omitempty"`
+}
+
+// GetPaymentParams defines parameters for GetPayment.
+type GetPaymentParams struct {
 	// XServiceName Optional. The calling service is identified by its API key, not by this header.
 	// If sent, it must name the key's own service, otherwise the request fails with 403.
 	XServiceName *XServiceName `json:"X-Service-Name,omitempty"`

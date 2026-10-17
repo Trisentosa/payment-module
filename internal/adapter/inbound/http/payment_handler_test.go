@@ -68,12 +68,7 @@ func newHarness() *harness {
 		query.NewGetByRefHandler(repo, c, get),
 		query.NewListPaymentsHandler(repo),
 	)
-	mux := http.NewServeMux()
-	mux.HandleFunc("POST /payments", h.CreatePayment)
-	mux.HandleFunc("DELETE /payments/{id}", h.CancelPayment)
-	mux.HandleFunc("GET /payments", h.ListPayments)
-	mux.HandleFunc("GET /payments/{id}", h.GetPayment)
-	mux.HandleFunc("GET /payments/ref/{reference_id}", h.GetPaymentByRef)
+	mux := httpAdapter.CallerRoutes(h, &httpAdapter.RefundHandler{})
 	return &harness{mux: middleware.CallerAuth(callerKeys)(mux), repo: repo, gateway: gw, cache: c}
 }
 
@@ -266,5 +261,68 @@ func TestCallerAPI_ListIgnoresCallerServiceParameter(t *testing.T) {
 	}
 	if got := h.repo.LastListFilter().CallerService; got != "billing-service" {
 		t.Errorf("list filter caller: got %q, want billing-service", got)
+	}
+}
+
+func TestCallerAPI_ListPagesWithOpaqueCursor(t *testing.T) {
+	h := newHarness()
+	for _, ref := range []string{"PAGE-1", "PAGE-2", "PAGE-3"} {
+		if rec := h.post(strings.Replace(createBody, "ORDER-77", ref, 1)); rec.Code != http.StatusCreated {
+			t.Fatalf("create %s: status %d body %s", ref, rec.Code, rec.Body)
+		}
+	}
+
+	type page struct {
+		Data []struct {
+			ReferenceID string `json:"reference_id"`
+		} `json:"data"`
+		Meta struct {
+			Count      int    `json:"count"`
+			NextCursor string `json:"next_cursor"`
+			HasMore    bool   `json:"has_more"`
+		} `json:"meta"`
+	}
+	var first, second page
+	rec := h.do(http.MethodGet, "/payments?limit=2", orderKey, "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &first); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("page 1: status %d body %s", rec.Code, rec.Body)
+	}
+	if first.Meta.Count != 2 || !first.Meta.HasMore || first.Meta.NextCursor == "" {
+		t.Fatalf("page 1 meta: %+v", first.Meta)
+	}
+	rec = h.do(http.MethodGet, "/payments?limit=2&cursor="+first.Meta.NextCursor, orderKey, "")
+	if err := json.Unmarshal(rec.Body.Bytes(), &second); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("page 2: status %d body %s", rec.Code, rec.Body)
+	}
+	if second.Meta.Count != 1 || second.Meta.HasMore || second.Meta.NextCursor != "" {
+		t.Errorf("page 2 meta: %+v", second.Meta)
+	}
+}
+
+func TestCallerAPI_ListRejectsMalformedParameters(t *testing.T) {
+	h := newHarness()
+	for _, qs := range []string{"cursor=garbage", "from=yesterday", "to=2026-13-01", "limit=ten", "limit=0"} {
+		if rec := h.do(http.MethodGet, "/payments?"+qs, orderKey, ""); rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status %d, want 400 (body %s)", qs, rec.Code, rec.Body)
+		}
+	}
+}
+
+// Regression: GET /payments/ref/{reference_id} and GET /payments/{id}/refunds made the
+// server panic at startup; both must still be reachable.
+func TestCallerRoutes_ByReferenceAndRefundListCoexist(t *testing.T) {
+	h := newHarness()
+	if rec := h.post(createBody); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	if rec := h.do(http.MethodGet, "/payments/ref/ORDER-77", orderKey, ""); rec.Code != http.StatusOK {
+		t.Errorf("by reference: %d %s", rec.Code, rec.Body)
+	}
+	if rec := h.do(http.MethodGet, "/payments/ref/refunds", orderKey, ""); rec.Code != http.StatusNotFound ||
+		!strings.Contains(rec.Body.String(), "NOT_FOUND") {
+		t.Errorf("reference named \"refunds\": %d %s, want the by-reference 404", rec.Code, rec.Body)
+	}
+	if rec := h.do(http.MethodGet, "/payments/"+createdID(t, h)+"/other", orderKey, ""); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown sub-resource: %d", rec.Code)
 	}
 }

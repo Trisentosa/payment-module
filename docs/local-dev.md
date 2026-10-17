@@ -60,8 +60,9 @@ The `-v` flag drops the named volume, giving you a clean slate.
 ## Running Tests
 
 ```sh
-make test
+make test               # unit tests, no Docker needed
+make test-integration   # adds Postgres and RabbitMQ tests (testcontainers, needs Docker)
+make e2e                # the real server against Docker infra and a fake Midtrans
 ```
 
-Domain unit tests (`go test ./internal/domain/...`) require no Docker.  
-Integration tests (`go test ./internal/adapter/outbound/postgres/...`) use `testcontainers-go` to spin up an ephemeral Postgres automatically — no `make up` required.
+No Docker? Postgres tests can use a scratch database instead; see [testing.md](testing.md#integration-tests).

@@ -350,3 +350,46 @@ func TestCapability_FollowsMidtransRefundRules(t *testing.T) {
 		}
 	}
 }
+
+func TestCreateTransaction_OverridesNotificationURL(t *testing.T) {
+	for _, configured := range []string{"", "https://tunnel.example/webhooks/midtrans"} {
+		var got []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got = r.Header.Values("X-Override-Notification")
+			_, _ = w.Write([]byte(`{"status_code":"201","transaction_id":"tx-1","transaction_status":"pending"}`))
+		}))
+		a := midtrans.NewAdapter(midtrans.Config{ServerKey: serverKey, BaseURL: srv.URL, Timeout: 5 * time.Second, NotificationURL: configured})
+		if _, err := a.CreateTransaction(context.Background(), chargeReq(payment.MethodQRIS)); err != nil {
+			t.Fatalf("CreateTransaction: %v", err)
+		}
+		srv.Close()
+		if configured == "" && len(got) != 0 || configured != "" && (len(got) != 1 || got[0] != configured) {
+			t.Errorf("configured %q: header %v", configured, got)
+		}
+	}
+}
+
+func TestCreateTransaction_QRISWithShopeePayAcquirer(t *testing.T) {
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		// Shape of a real sandbox reply for acquirer "airpay shopee".
+		_, _ = w.Write([]byte(`{"status_code":"201","transaction_id":"tx-sq","transaction_status":"pending","acquirer":"airpay shopee",
+			"qr_string":"00020101021126","actions":[{"name":"generate-qr-code","method":"GET",
+			"url":"https://api.sandbox.midtrans.com/v2/qris/shopeepay/sppq_fe537b42/qr-code"}]}`))
+	}))
+	defer srv.Close()
+	a := midtrans.NewAdapter(midtrans.Config{ServerKey: serverKey, BaseURL: srv.URL, Timeout: 5 * time.Second,
+		QRISAcquirer: midtrans.QRISAcquirerShopeePay})
+
+	res, err := a.CreateTransaction(context.Background(), chargeReq(payment.MethodQRIS))
+	if err != nil {
+		t.Fatalf("CreateTransaction: %v", err)
+	}
+	if object(t, body, "qris")["acquirer"] != "airpay shopee" {
+		t.Errorf("qris.acquirer: got %v", body["qris"])
+	}
+	if res.NextAction.Type != ports.NextActionDisplayQR || res.NextAction.QRImageURL == "" {
+		t.Errorf("next action: %+v", res.NextAction)
+	}
+}
